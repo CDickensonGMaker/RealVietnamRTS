@@ -17,6 +17,7 @@ extends Node3D
 ## - Space: Toggle auto-mode
 
 const JobTypes = preload("res://firebase_system/jobs/job_types.gd")
+const TerrainTypes = preload("res://terrain/terrain_types.gd")
 
 ## Mock heightmap for flat terrain
 class MockHeightmap:

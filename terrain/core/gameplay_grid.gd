@@ -3,6 +3,8 @@ class_name GameplayGrid
 ## Grid-based metadata storage for efficient game logic queries
 ## Stores elevation, terrain type, movement cost, cover values per cell
 ## Designed for RTS gameplay - travel speed modifiers, combat bonuses, pathfinding
+##
+## NOTE: Terrain types now use TerrainTypes (terrain/terrain_types.gd) as single source of truth
 
 signal grid_updated(region: Rect2i)
 
@@ -11,53 +13,24 @@ var grid_size: int = 256  # Cells per side
 var cell_size_meters: float = 12.0  # Meters per cell (larger than heightmap for perf)
 var world_size: float = 3072.0  # Total world size in meters
 
-# Terrain type enum matching clearing_system
-enum TerrainType {
-	CLEAR = 0,       # Open ground, fastest movement
-	RICE_PADDY = 1,  # Flooded field, slow movement, no cover
-	GRASSLAND = 2,   # Light vegetation, normal speed
-	LIGHT_JUNGLE = 3,  # Light cover, slight slow
-	MEDIUM_JUNGLE = 4, # Good cover, moderate slow
-	HEAVY_JUNGLE = 5,  # Excellent cover, very slow
-	WATER = 6,       # Impassable for most units
-	CLIFF = 7,       # Impassable, blocks LOS
-}
+# Import unified terrain types - THE SINGLE SOURCE OF TRUTH
+const TerrainTypesConst = preload("res://terrain/terrain_types.gd")
 
-# Movement cost multipliers (1.0 = normal, higher = slower)
-const MOVEMENT_COSTS: Dictionary = {
-	TerrainType.CLEAR: 1.0,
-	TerrainType.RICE_PADDY: 1.8,
-	TerrainType.GRASSLAND: 1.1,
-	TerrainType.LIGHT_JUNGLE: 1.3,
-	TerrainType.MEDIUM_JUNGLE: 1.6,
-	TerrainType.HEAVY_JUNGLE: 2.2,
-	TerrainType.WATER: 99.0,  # Effectively impassable
-	TerrainType.CLIFF: 99.0,
-}
+# Alias for backward compatibility - all code using TerrainType.X continues to work
+const TerrainType = TerrainTypesConst.Type
 
-# Cover values (0.0 = no cover, 1.0 = full concealment)
-const COVER_VALUES: Dictionary = {
-	TerrainType.CLEAR: 0.0,
-	TerrainType.RICE_PADDY: 0.1,
-	TerrainType.GRASSLAND: 0.15,
-	TerrainType.LIGHT_JUNGLE: 0.35,
-	TerrainType.MEDIUM_JUNGLE: 0.55,
-	TerrainType.HEAVY_JUNGLE: 0.8,
-	TerrainType.WATER: 0.0,
-	TerrainType.CLIFF: 0.9,
-}
+# Movement costs now come from TerrainTypes
+# Legacy alias for backward compatibility
+static func get_movement_cost_for_type(terrain_type: int) -> float:
+	return TerrainTypesConst.get_movement_cost(terrain_type)
 
-# Defense bonus multipliers (damage reduction when in cover)
-const DEFENSE_BONUS: Dictionary = {
-	TerrainType.CLEAR: 1.0,
-	TerrainType.RICE_PADDY: 0.95,
-	TerrainType.GRASSLAND: 0.9,
-	TerrainType.LIGHT_JUNGLE: 0.8,
-	TerrainType.MEDIUM_JUNGLE: 0.65,
-	TerrainType.HEAVY_JUNGLE: 0.5,
-	TerrainType.WATER: 1.0,
-	TerrainType.CLIFF: 0.4,
-}
+# Cover values now come from TerrainTypes
+static func get_cover_for_type(terrain_type: int) -> float:
+	return TerrainTypesConst.get_cover(terrain_type)
+
+# Defense bonus = 1.0 - cover (damage multiplier, lower = better defense)
+static func get_defense_bonus_for_type(terrain_type: int) -> float:
+	return 1.0 - TerrainTypesConst.get_cover(terrain_type) * 0.6  # Scale cover to defense
 
 # Grid data arrays (packed for memory efficiency)
 var elevation: PackedFloat32Array      # Height in meters
