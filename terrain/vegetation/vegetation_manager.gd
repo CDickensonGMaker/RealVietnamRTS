@@ -2,16 +2,15 @@ class_name VegetationManager
 extends Node3D
 ## Grid-based vegetation with terrain types and density zones.
 ## Uses 2x2 cell bundles for efficient clearing and LOS.
+##
+## NOTE: Terrain types are now defined in TerrainTypes (terrain/terrain_types.gd)
+## This class uses TerrainTypes.Type for the enum values.
 
-## Terrain/Vegetation types
-enum TerrainType {
-	CLEAR,          # No vegetation (roads, clearings)
-	RICE_PADDY,     # Flat water/crops - no trees
-	GRASSLAND,      # Low grass, very sparse trees
-	LIGHT_JUNGLE,   # Sparse trees, good visibility
-	MEDIUM_JUNGLE,  # Moderate density
-	HEAVY_JUNGLE,   # Dense canopy, blocks LOS
-}
+## Import unified terrain types
+const TerrainTypesConst = preload("res://terrain/terrain_types.gd")
+
+## Alias for backward compatibility - all code using TerrainType.X continues to work
+const TerrainType = TerrainTypesConst.Type
 
 ## Bundle size (2x2 cells treated as one unit)
 const BUNDLE_SIZE := 2
