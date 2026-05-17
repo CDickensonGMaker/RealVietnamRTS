@@ -19,6 +19,33 @@ const TerrainTypesConst = preload("res://terrain/terrain_types.gd")
 # Alias for backward compatibility - all code using TerrainType.X continues to work
 const TerrainType = TerrainTypesConst.Type
 
+# Terrain classification thresholds
+const CLIFF_SLOPE_THRESHOLD := 0.7        # Slopes steeper than this are cliffs
+const WATER_ELEVATION_MAX := 5.0          # Below this height, check for water/paddies
+const FLOODED_ELEVATION_MAX := 2.0        # Below this is always water
+const RICE_PADDY_SLOPE_MAX := 0.1         # Flat low areas become rice paddies
+const LIGHT_JUNGLE_SLOPE_MIN := 0.4       # Medium slopes have lighter vegetation
+const MEDIUM_ELEVATION_THRESHOLD := 50.0  # Elevation zones for vegetation type
+const HEAVY_ELEVATION_THRESHOLD := 150.0
+const HIGH_ELEVATION_THRESHOLD := 250.0
+
+# Vegetation density thresholds
+const VEGETATION_CLEAR_THRESHOLD := 0.1   # Below this = cleared ground
+const VEGETATION_GRASS_THRESHOLD := 0.3   # Below this = grassland
+const VEGETATION_LIGHT_THRESHOLD := 0.5   # Below this = light jungle
+const VEGETATION_MEDIUM_THRESHOLD := 0.7  # Below this = medium jungle
+
+# LOS blocking thresholds
+const LOS_HEAVY_JUNGLE_DENSITY := 0.8     # Heavy jungle blocks at this density
+const LOS_MEDIUM_JUNGLE_DENSITY := 0.9    # Medium jungle blocks at this density
+
+# Combat modifiers
+const SLOPE_MOVEMENT_PENALTY := 0.5       # Extra cost per unit slope
+const COVER_DEFENSE_SCALE := 0.6          # How much cover translates to defense
+
+# Movement thresholds
+const RICE_PADDY_RANDOM_CHANCE := 0.3     # Chance of rice paddy vs grassland
+
 # Movement costs now come from TerrainTypes
 # Legacy alias for backward compatibility
 static func get_movement_cost_for_type(terrain_type: int) -> float:
@@ -30,7 +57,7 @@ static func get_cover_for_type(terrain_type: int) -> float:
 
 # Defense bonus = 1.0 - cover (damage multiplier, lower = better defense)
 static func get_defense_bonus_for_type(terrain_type: int) -> float:
-	return 1.0 - TerrainTypesConst.get_cover(terrain_type) * 0.6  # Scale cover to defense
+	return 1.0 - TerrainTypesConst.get_cover(terrain_type) * COVER_DEFENSE_SCALE
 
 # Grid data arrays (packed for memory efficiency)
 var elevation: PackedFloat32Array      # Height in meters
@@ -127,29 +154,29 @@ func build_from_terrain() -> void:
 ## Determine terrain type from elevation and slope
 func _determine_terrain_type(height: float, slope_val: float, _wx: float, _wz: float) -> int:
 	# Cliff detection (steep slopes)
-	if slope_val > 0.7:
+	if slope_val > CLIFF_SLOPE_THRESHOLD:
 		return TerrainType.CLIFF
 
+	# Very low = flooded (check this first to avoid logic issues)
+	if height < FLOODED_ELEVATION_MAX:
+		return TerrainType.WATER
+
 	# Low elevation near water level
-	if height < 5.0:
-		if slope_val < 0.1:
+	if height < WATER_ELEVATION_MAX:
+		if slope_val < RICE_PADDY_SLOPE_MAX:
 			return TerrainType.RICE_PADDY  # Flat low areas = paddies
 		return TerrainType.WATER
 
-	# Very low = flooded
-	if height < 2.0:
-		return TerrainType.WATER
-
 	# Medium slopes = lighter vegetation
-	if slope_val > 0.4:
+	if slope_val > LIGHT_JUNGLE_SLOPE_MIN:
 		return TerrainType.LIGHT_JUNGLE
 
 	# Based on elevation zones (Vietnam terrain)
-	if height < 50.0:
-		return TerrainType.RICE_PADDY if randf() < 0.3 else TerrainType.GRASSLAND
-	elif height < 150.0:
+	if height < MEDIUM_ELEVATION_THRESHOLD:
+		return TerrainType.RICE_PADDY if randf() < RICE_PADDY_RANDOM_CHANCE else TerrainType.GRASSLAND
+	elif height < HEAVY_ELEVATION_THRESHOLD:
 		return TerrainType.MEDIUM_JUNGLE
-	elif height < 250.0:
+	elif height < HIGH_ELEVATION_THRESHOLD:
 		return TerrainType.HEAVY_JUNGLE
 	else:
 		return TerrainType.LIGHT_JUNGLE  # High altitude = sparser
@@ -228,11 +255,11 @@ func get_terrain_type_at(gx: int, gz: int) -> int:
 ## Get movement cost multiplier at world position
 func get_movement_cost(world_pos: Vector3) -> float:
 	var ttype: int = get_terrain_type(world_pos)
-	var base_cost: float = MOVEMENT_COSTS.get(ttype, 1.0)
+	var base_cost: float = TerrainTypesConst.get_movement_cost(ttype)
 
 	# Slope modifier (steeper = slower)
 	var slope_val: float = get_slope(world_pos)
-	var slope_penalty: float = 1.0 + slope_val * 0.5  # Up to 50% slower on slopes
+	var slope_penalty: float = 1.0 + slope_val * SLOPE_MOVEMENT_PENALTY
 
 	return base_cost * slope_penalty
 
@@ -240,13 +267,14 @@ func get_movement_cost(world_pos: Vector3) -> float:
 ## Get cover value at world position (0-1)
 func get_cover(world_pos: Vector3) -> float:
 	var ttype: int = get_terrain_type(world_pos)
-	return COVER_VALUES.get(ttype, 0.0)
+	return TerrainTypesConst.get_cover(ttype)
 
 
 ## Get defense bonus at world position (damage multiplier, lower = better)
 func get_defense_bonus(world_pos: Vector3) -> float:
 	var ttype: int = get_terrain_type(world_pos)
-	return DEFENSE_BONUS.get(ttype, 1.0)
+	var cover: float = TerrainTypesConst.get_cover(ttype)
+	return 1.0 - cover * 0.6  # Scale cover to defense
 
 
 ## Get vegetation density at world position (0-1)
@@ -308,8 +336,14 @@ func has_line_of_sight(from_pos: Vector3, to_pos: Vector3) -> bool:
 			if cell_h > expected_h:
 				return false
 		elif cell_type == TerrainType.HEAVY_JUNGLE:
-			# Dense jungle has chance to block based on distance
-			if randf() < 0.3:  # 30% block chance per cell
+			# Dense jungle blocks LOS based on vegetation density (deterministic)
+			var veg_density: float = vegetation_density[_grid_to_index(x, z)]
+			if veg_density >= LOS_HEAVY_JUNGLE_DENSITY:
+				return false
+		elif cell_type == TerrainType.MEDIUM_JUNGLE:
+			# Medium jungle blocks at very high density
+			var veg_density: float = vegetation_density[_grid_to_index(x, z)]
+			if veg_density >= LOS_MEDIUM_JUNGLE_DENSITY:
 				return false
 
 		# Step to next cell
@@ -350,16 +384,16 @@ func update_region(center: Vector3, radius_meters: float) -> void:
 				vegetation_density[idx] = density
 
 				# Update terrain type based on new vegetation
-				if density < 0.1:
+				if density < VEGETATION_CLEAR_THRESHOLD:
 					terrain_type[idx] = TerrainType.CLEAR
 					is_passable[idx] = 1
-				elif density < 0.3:
+				elif density < VEGETATION_GRASS_THRESHOLD:
 					terrain_type[idx] = TerrainType.GRASSLAND
-				elif density < 0.5:
+				elif density < VEGETATION_LIGHT_THRESHOLD:
 					terrain_type[idx] = TerrainType.LIGHT_JUNGLE
-				elif density < 0.7:
+				elif density < VEGETATION_MEDIUM_THRESHOLD:
 					terrain_type[idx] = TerrainType.MEDIUM_JUNGLE
-				# else keep current type
+				# else keep current type (heavy jungle)
 
 	grid_updated.emit(Rect2i(min_x, min_z, max_x - min_x, max_z - min_z))
 

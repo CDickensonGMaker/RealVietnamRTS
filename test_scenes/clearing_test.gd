@@ -69,6 +69,14 @@ func _ready() -> void:
 	# Get TerrainIntegration autoload (we may use its systems if already initialized)
 	terrain_intg = get_node_or_null("/root/TerrainIntegration")
 
+	# Disable TerrainIntegration's vegetation to prevent duplicate billboard systems
+	if terrain_intg and terrain_intg.has_method("get"):
+		var ti_billboard = terrain_intg.get("billboard_vegetation")
+		if ti_billboard and ti_billboard is Node3D:
+			ti_billboard.visible = false
+			ti_billboard.set_process(false)
+			print("[ClearingTest] Disabled TerrainIntegration billboard vegetation")
+
 	# Calculate center of map for spawning and camera
 	var map_center := MAP_SIZE * 0.5
 
@@ -132,6 +140,16 @@ func _ready() -> void:
 	print("  Space: Toggle auto-mode")
 	print("  G: Toggle grid overlay")
 	print("")
+
+
+func _exit_tree() -> void:
+	# Re-enable TerrainIntegration's vegetation when test scene closes
+	if terrain_intg and terrain_intg.has_method("get"):
+		var ti_billboard = terrain_intg.get("billboard_vegetation")
+		if ti_billboard and ti_billboard is Node3D:
+			ti_billboard.visible = true
+			ti_billboard.set_process(true)
+			print("[ClearingTest] Re-enabled TerrainIntegration billboard vegetation")
 
 
 ## Setup local terrain with small map for fast generation

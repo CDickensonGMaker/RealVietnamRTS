@@ -10,6 +10,8 @@ const VegetationManagerClass := preload("res://terrain/vegetation/vegetation_man
 const BillboardVegetationClass := preload("res://terrain/vegetation/billboard_vegetation.gd")
 const ClearingSystemClass := preload("res://terrain/systems/clearing_system.gd")
 const DamageSystemClass := preload("res://terrain/systems/damage_system.gd")
+const GameplayGridClass := preload("res://terrain/core/gameplay_grid.gd")
+const TerrainTypesConst := preload("res://terrain/terrain_types.gd")
 
 # Re-export damage types for external use
 enum DamageType {
@@ -31,6 +33,7 @@ var vegetation_manager: Node3D
 var billboard_vegetation: Node3D
 var clearing_system: Node
 var damage_system: Node
+var gameplay_grid: RefCounted  # GameplayGrid for RTS queries (movement cost, cover, LOS)
 
 # State
 var _is_initialized: bool = false
@@ -100,6 +103,10 @@ func _create_terrain_systems() -> void:
 	# Vegetation manager chunk size
 	vegetation_manager.set_chunk_size(terrain_manager.chunk_size)
 
+	# Create GameplayGrid for RTS queries
+	gameplay_grid = GameplayGridClass.new(terrain_manager.map_size, 512)  # 512x512 grid = 6m cells
+	gameplay_grid.set_clearing_system(clearing_system)
+
 	print("[TerrainIntegration] Terrain subsystems wired up (using autoloads for ClearingSystem/DamageSystem)")
 
 
@@ -117,6 +124,10 @@ func _connect_signals() -> void:
 	# TerrainManager signals
 	terrain_manager.terrain_ready.connect(_on_terrain_ready)
 	terrain_manager.chunk_loaded.connect(_on_chunk_loaded)
+
+	# GameplayGrid signals (for pathfinding/combat updates)
+	if gameplay_grid:
+		gameplay_grid.grid_updated.connect(_on_gameplay_grid_updated)
 
 	print("[TerrainIntegration] Signal connections established")
 
@@ -146,6 +157,11 @@ func init_terrain(camera: Camera3D, seed_value: int = -1) -> void:
 	# Generate terrain
 	terrain_manager.generate_terrain(seed_value)
 
+	# Build GameplayGrid from terrain data
+	if gameplay_grid:
+		gameplay_grid.set_heightmap(terrain_manager.heightmap)
+		gameplay_grid.build_from_terrain()
+
 	_is_initialized = true
 	print("[TerrainIntegration] Terrain initialized with camera: %s" % camera.name)
 
@@ -165,26 +181,89 @@ func get_normal_at(world_pos: Vector3) -> Vector3:
 	return terrain_manager.get_normal_at(world_pos)
 
 
-## Get movement cost multiplier at world position (based on vegetation density)
+## Get movement cost multiplier at world position (based on terrain type)
 ## Returns: 1.0 = full speed, 0.3 = heavy jungle (30% speed), etc.
+## Uses GameplayGrid as the single source of truth for RTS queries
 func get_movement_cost(world_pos: Vector3) -> float:
-	if not _is_initialized or not vegetation_manager:
+	if not _is_initialized:
 		return 1.0
 
-	# VegetationManager.get_movement_multiplier_at returns speed multiplier
-	# We return this directly as movement cost is inverted in the RTS context
-	var multiplier: float = vegetation_manager.get_movement_multiplier_at(
-		world_pos,
-		terrain_manager.chunk_size
-	)
-	return multiplier
+	# Use GameplayGrid for movement cost (includes slope penalty)
+	if gameplay_grid:
+		return gameplay_grid.get_movement_cost(world_pos)
+
+	# Fallback to VegetationManager if GameplayGrid not ready
+	if vegetation_manager:
+		var multiplier: float = vegetation_manager.get_movement_multiplier_at(
+			world_pos,
+			terrain_manager.chunk_size
+		)
+		return multiplier
+
+	return 1.0
 
 
-## Check if position blocks line of sight (dense vegetation)
+## Get movement speed multiplier at world position
+## Returns: 1.0 = full speed, lower = slower
+func get_movement_speed(world_pos: Vector3) -> float:
+	var cost: float = get_movement_cost(world_pos)
+	if cost <= 0.0:
+		return 0.0
+	return 1.0 / cost
+
+
+## Get cover value at world position (0.0-1.0)
+## Returns damage reduction factor (0 = no cover, 1 = full cover)
+func get_cover_at(world_pos: Vector3) -> float:
+	if not _is_initialized or not gameplay_grid:
+		return 0.0
+	return gameplay_grid.get_cover(world_pos)
+
+
+## Get slope at world position (0=flat, 1=cliff)
+func get_slope_at(world_pos: Vector3) -> float:
+	if not _is_initialized or not gameplay_grid:
+		return 0.0
+	return gameplay_grid.get_slope(world_pos)
+
+
+## Check if position is passable by ground units
+func is_passable(world_pos: Vector3) -> bool:
+	if not _is_initialized or not gameplay_grid:
+		return true
+	return gameplay_grid.is_position_passable(world_pos)
+
+
+## Check line of sight between two positions
+func has_line_of_sight(from_pos: Vector3, to_pos: Vector3) -> bool:
+	if not _is_initialized or not gameplay_grid:
+		return true
+	return gameplay_grid.has_line_of_sight(from_pos, to_pos)
+
+
+## Get elevation advantage (height difference for combat)
+func get_elevation_advantage(attacker_pos: Vector3, target_pos: Vector3) -> float:
+	if not _is_initialized or not gameplay_grid:
+		return 0.0
+	return gameplay_grid.get_elevation_advantage(attacker_pos, target_pos)
+
+
+## Check if position blocks line of sight (dense vegetation or cliffs)
+## Uses GameplayGrid for consistent terrain data
 func blocks_los(world_pos: Vector3) -> bool:
-	if not _is_initialized or not vegetation_manager:
+	if not _is_initialized:
 		return false
-	return vegetation_manager.blocks_los(world_pos, terrain_manager.chunk_size)
+
+	# Use GameplayGrid terrain type for LOS blocking
+	if gameplay_grid:
+		var terrain_type: int = gameplay_grid.get_terrain_type(world_pos)
+		return TerrainTypesConst.blocks_los(terrain_type)
+
+	# Fallback to vegetation_manager
+	if vegetation_manager:
+		return vegetation_manager.blocks_los(world_pos, terrain_manager.chunk_size)
+
+	return false
 
 
 ## Apply damage at world position - wrapper for DamageSystem
@@ -384,6 +463,16 @@ func _on_vegetation_updated(region: Rect2i) -> void:
 					vegetation_manager._chunk_terrain[coord]
 				)
 
+	# Update GameplayGrid when vegetation changes
+	if gameplay_grid:
+		var world_center := Vector3(
+			(world_min.x + world_max.x) * 0.5,
+			0.0,
+			(world_min.y + world_max.y) * 0.5
+		)
+		var radius: float = maxf(world_max.x - world_min.x, world_max.y - world_min.y) * 0.5
+		gameplay_grid.update_region(world_center, radius)
+
 
 func _on_damage_applied(position: Vector3, type: int, radius: float) -> void:
 	# Emit local signal
@@ -417,6 +506,12 @@ func _on_chunk_loaded(coord: Vector2i, _is_playable: bool) -> void:
 		terrain_manager.heightmap,
 		vegetation_manager._chunk_terrain[coord]
 	)
+
+
+func _on_gameplay_grid_updated(_region: Rect2i) -> void:
+	# GameplayGrid terrain types updated - pathfinding and combat systems
+	# will automatically see the new data on next query
+	pass
 
 
 # =============================================================================
@@ -507,6 +602,10 @@ func clear_vegetation_around_building(center: Vector3, radius: float = 5.0) -> i
 						terrain_manager.heightmap,
 						vegetation_manager._chunk_terrain[coord]
 					)
+
+		# Update GameplayGrid with cleared area (terrain_type -> CLEAR)
+		if gameplay_grid:
+			gameplay_grid.mark_cleared(center, radius)
 
 		print("[TerrainIntegration] Cleared %d vegetation bundles around building at %s (r=%.1f)" % [cleared, center, radius])
 
