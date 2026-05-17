@@ -166,6 +166,11 @@ func _check_cover_objects(world_pos: Vector3) -> int:
 
 ## Get cover type from a cover object.
 func _get_object_cover_type(obj: Node, group: String) -> int:
+	# Check for DestructibleCover component first (dynamic cover)
+	var destructible: Node = _find_destructible_cover(obj)
+	if destructible and destructible.has_method("get_cover_type"):
+		return destructible.get_cover_type()
+
 	# Check if object has explicit cover_type property
 	if obj.has_method("get") and obj.get("cover_type"):
 		return obj.cover_type
@@ -180,6 +185,20 @@ func _get_object_cover_type(obj: Node, group: String) -> int:
 			return GameEnums.CoverType.LIGHT
 
 	return GameEnums.CoverType.NONE
+
+
+## Find DestructibleCover component on object or its children.
+func _find_destructible_cover(obj: Node) -> Node:
+	# Check if obj itself is destructible
+	if obj.is_in_group("destructible_cover"):
+		return obj
+
+	# Check children
+	for child in obj.get_children():
+		if child.is_in_group("destructible_cover"):
+			return child
+
+	return null
 
 
 ## Get cover from terrain type at position.

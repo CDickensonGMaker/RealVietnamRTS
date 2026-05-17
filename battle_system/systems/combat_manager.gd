@@ -29,6 +29,13 @@ const EFFECTIVE_RANGE_RATIO: float = 0.6  # Full accuracy within 60% of max rang
 const ARMOR_DAMAGE_REDUCTION: float = 0.02  # 2% per armor point
 const MAX_ARMOR_REDUCTION: float = 0.7  # Max 70% reduction
 
+## Height advantage (Broken Arrow style)
+const HEIGHT_ADVANTAGE_PER_METER: float = 0.01  # 1% accuracy bonus per meter elevation
+const HEIGHT_ADVANTAGE_MAX: float = 0.2  # Max 20% accuracy bonus from height
+const HEIGHT_DAMAGE_BONUS_PER_METER: float = 0.005  # 0.5% damage bonus per meter
+const HEIGHT_DAMAGE_BONUS_MAX: float = 0.15  # Max 15% damage bonus
+const HEIGHT_SIGNIFICANT_THRESHOLD: float = 2.0  # Min height diff to matter
+
 ## Projectile pool
 var projectile_pool: Node = null
 
@@ -208,6 +215,10 @@ func calculate_hit_chance(attacker: Node, target: Node, weapon_id: String) -> fl
 	if distance < POINT_BLANK_RANGE:
 		hit_chance += 0.15
 
+	# Height advantage (Broken Arrow style - high ground matters)
+	var height_data: Dictionary = _calculate_height_advantage(attacker, target)
+	hit_chance += height_data.accuracy_mod
+
 	return clampf(hit_chance, HIT_CHANCE_MIN, HIT_CHANCE_MAX)
 
 
@@ -233,6 +244,12 @@ func resolve_hit(target: Node, damage: float, source: Node, weapon_id: String = 
 
 	# Apply both armor and cover reduction (multiplicative)
 	var final_damage: float = damage * (1.0 - armor_reduction) * (1.0 - cover_reduction)
+
+	# Height advantage damage bonus (Broken Arrow style)
+	if is_instance_valid(source):
+		var height_data: Dictionary = _calculate_height_advantage(source, target)
+		if height_data.damage_mod > 0.0:
+			final_damage *= (1.0 + height_data.damage_mod)
 
 	# Apply damage
 	if target.has_method("take_damage"):
@@ -417,6 +434,44 @@ func _is_suppressed(unit: Node) -> bool:
 	if unit.has_method("get") and unit.get("suppression_level"):
 		return unit.suppression_level > 0.5
 	return false
+
+
+## Calculate height advantage for attacker shooting at target.
+## Returns positive value if attacker has high ground, negative if shooting uphill.
+## Broken Arrow style: terrain elevation creates significant tactical advantages.
+func _calculate_height_advantage(attacker: Node, target: Node) -> Dictionary:
+	var attacker_y: float = attacker.global_position.y
+	var target_y: float = target.global_position.y
+	var height_diff: float = attacker_y - target_y
+
+	# Skip if height difference is negligible
+	if absf(height_diff) < HEIGHT_SIGNIFICANT_THRESHOLD:
+		return {"accuracy_mod": 0.0, "damage_mod": 0.0, "has_advantage": false}
+
+	var has_advantage: bool = height_diff > 0.0
+
+	# Accuracy modifier (shooting down is easier, up is harder)
+	var accuracy_mod: float = clampf(
+		height_diff * HEIGHT_ADVANTAGE_PER_METER,
+		-HEIGHT_ADVANTAGE_MAX,
+		HEIGHT_ADVANTAGE_MAX
+	)
+
+	# Damage modifier (gravity assists downward shots)
+	var damage_mod: float = 0.0
+	if has_advantage:
+		damage_mod = clampf(
+			height_diff * HEIGHT_DAMAGE_BONUS_PER_METER,
+			0.0,
+			HEIGHT_DAMAGE_BONUS_MAX
+		)
+
+	return {
+		"accuracy_mod": accuracy_mod,
+		"damage_mod": damage_mod,
+		"has_advantage": has_advantage,
+		"height_diff": height_diff
+	}
 
 
 ## Call an artillery strike at a position.

@@ -310,3 +310,109 @@ func get_damage_count() -> int:
 ## Get all damage zones (for saving/loading)
 func get_damage_zones() -> Array[Dictionary]:
 	return damage_zones
+
+
+# =============================================================================
+# CRATER COVER SYSTEM (Men of War style - craters provide infantry cover)
+# =============================================================================
+
+## Cover values by damage type (how much cover the crater provides at center)
+const CRATER_COVER_VALUES: Dictionary = {
+	DamageType.SMALL_EXPLOSION: 0.3,     # Grenade crater - light cover
+	DamageType.MEDIUM_EXPLOSION: 0.5,    # Artillery shell - moderate cover
+	DamageType.LARGE_EXPLOSION: 0.7,     # Bomb crater - good foxhole
+	DamageType.NAPALM: 0.1,              # Burn scar - minimal cover
+	DamageType.BUNKER_COLLAPSE: 0.4,     # Rubble - moderate cover
+}
+
+## Minimum crater depth to provide cover (normalized 0-1)
+const MIN_COVER_DEPTH := 0.02
+
+## Check if a world position is inside any crater
+func is_in_crater(world_pos: Vector3) -> bool:
+	for zone in damage_zones:
+		var zone_pos: Vector3 = zone.position
+		var radius: float = zone.radius
+		var dist_sq: float = (Vector2(world_pos.x, world_pos.z) - Vector2(zone_pos.x, zone_pos.z)).length_squared()
+
+		# Inside crater if within 70% of radius (the depression zone, not the rim)
+		var inner_radius: float = radius * 0.7
+		if dist_sq < inner_radius * inner_radius:
+			return true
+
+	return false
+
+
+## Get cover value at a world position from crater(s)
+## Returns 0.0 (no cover) to ~0.7 (good cover in large crater center)
+func get_crater_cover(world_pos: Vector3) -> float:
+	var max_cover: float = 0.0
+
+	for zone in damage_zones:
+		var zone_pos: Vector3 = zone.position
+		var radius: float = zone.radius
+		var damage_type: DamageType = zone.type
+		var intensity: float = zone.intensity
+
+		var dist: float = (Vector2(world_pos.x, world_pos.z) - Vector2(zone_pos.x, zone_pos.z)).length()
+
+		# Only inside the depression zone (inner 70%)
+		var inner_radius: float = radius * 0.7
+		if dist >= inner_radius:
+			continue
+
+		# Cover increases toward center
+		var center_factor: float = 1.0 - (dist / inner_radius)
+		center_factor = center_factor * center_factor  # Quadratic falloff
+
+		# Base cover from crater type
+		var base_cover: float = CRATER_COVER_VALUES.get(damage_type, 0.3)
+
+		# Scale by intensity (bigger explosion = deeper crater = more cover)
+		var cover: float = base_cover * center_factor * intensity
+
+		max_cover = maxf(max_cover, cover)
+
+	return max_cover
+
+
+## Get the nearest crater to a position (for AI to seek cover)
+## Returns null if no crater within search_radius
+func get_nearest_crater(world_pos: Vector3, search_radius: float = 50.0) -> Dictionary:
+	var nearest: Dictionary = {}
+	var nearest_dist: float = search_radius
+
+	for zone in damage_zones:
+		var zone_pos: Vector3 = zone.position
+		var dist: float = (Vector2(world_pos.x, world_pos.z) - Vector2(zone_pos.x, zone_pos.z)).length()
+
+		if dist < nearest_dist:
+			nearest_dist = dist
+			nearest = zone
+
+	return nearest
+
+
+## Get all craters that provide cover within a radius (for AI pathfinding)
+func get_cover_craters_in_radius(world_pos: Vector3, radius: float) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+
+	for zone in damage_zones:
+		var zone_pos: Vector3 = zone.position
+		var damage_type: DamageType = zone.type
+
+		# Skip burn scars - minimal cover
+		if damage_type == DamageType.NAPALM:
+			continue
+
+		var dist: float = (Vector2(world_pos.x, world_pos.z) - Vector2(zone_pos.x, zone_pos.z)).length()
+
+		if dist < radius:
+			result.append(zone)
+
+	return result
+
+
+## Get optimal position within a crater for maximum cover
+func get_crater_center(zone: Dictionary) -> Vector3:
+	return zone.position
