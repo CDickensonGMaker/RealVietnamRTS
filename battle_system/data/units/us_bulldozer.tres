@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="SquadData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://battle_system/data/squad_data.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+display_name = "D7 Bulldozer"
+unit_type = 3
+faction = 0
+squad_size = 1
+health_per_soldier = 500.0
+damage_per_second = 0.0
+attack_range = 0.0
+armor = 50.0
+move_speed = 3.0
+rotation_speed = 1.5
+max_slope = 0.45
+slope_speed_penalty = 0.5
+sight_range = 20.0
+stealth_rating = 0.0
+can_build = true
+can_capture = false
+is_vehicle = true
+can_redeploy = true

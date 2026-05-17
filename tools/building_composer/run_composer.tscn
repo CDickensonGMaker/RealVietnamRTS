@@ -1,0 +1,24 @@
+[gd_scene load_steps=3 format=3 uid="uid://c3runbuildingcomposer"]
+
+[ext_resource type="Script" path="res://tools/building_composer/building_composer.gd" id="1_composer"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bg"]
+bg_color = Color(0.15, 0.15, 0.18, 1)
+
+[node name="BuildingComposerStandalone" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_bg")
+script = ExtResource("1_composer")
+
+[node name="Title" type="Label" parent="."]
+layout_mode = 0
+offset_right = 800.0
+offset_bottom = 30.0
+text = "Building Composer - RealVietnamRTS"
+horizontal_alignment = 1
+vertical_alignment = 1

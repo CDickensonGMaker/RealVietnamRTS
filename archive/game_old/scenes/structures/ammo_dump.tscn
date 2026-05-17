@@ -1,0 +1,52 @@
+[gd_scene load_steps=6 format=3 uid="uid://ammo_dump_struct_01"]
+
+[ext_resource type="Script" path="res://scripts/structures/ammo_dump.gd" id="1_ammo_dump"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_1"]
+size = Vector3(3, 1.5, 3)
+
+[sub_resource type="BoxMesh" id="BoxMesh_crate1"]
+size = Vector3(1.2, 0.8, 0.8)
+
+[sub_resource type="BoxMesh" id="BoxMesh_crate2"]
+size = Vector3(0.9, 0.6, 0.7)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_crate"]
+albedo_color = Color(0.35, 0.3, 0.2, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ammo"]
+albedo_color = Color(0.25, 0.28, 0.22, 1)
+
+[node name="AmmoDump" type="StaticBody3D"]
+collision_layer = 4
+collision_mask = 0
+script = ExtResource("1_ammo_dump")
+structure_name = "Ammo Dump"
+max_health = 40.0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
+shape = SubResource("BoxShape3D_1")
+
+[node name="Crate1" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.5, 0.4, -0.4)
+mesh = SubResource("BoxMesh_crate1")
+surface_material_override/0 = SubResource("StandardMaterial3D_crate")
+
+[node name="Crate2" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.966, 0, 0.259, 0, 1, 0, -0.259, 0, 0.966, 0.6, 0.3, 0.3)
+mesh = SubResource("BoxMesh_crate2")
+surface_material_override/0 = SubResource("StandardMaterial3D_crate")
+
+[node name="Crate3" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.94, 0, -0.342, 0, 1, 0, 0.342, 0, 0.94, -0.3, 0.3, 0.5)
+mesh = SubResource("BoxMesh_crate2")
+surface_material_override/0 = SubResource("StandardMaterial3D_ammo")
+
+[node name="Crate4" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, -0.2)
+mesh = SubResource("BoxMesh_crate2")
+surface_material_override/0 = SubResource("StandardMaterial3D_ammo")
+
+[node name="SelectionIndicator" type="MeshInstance3D" parent="."]
+visible = false

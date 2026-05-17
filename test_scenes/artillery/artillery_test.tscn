@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://b4xj5kn8q2cog"]
+
+[ext_resource type="Script" path="res://test_scenes/artillery/artillery_test.gd" id="1_main"]
+
+[node name="ArtilleryTest" type="Node3D"]
+script = ExtResource("1_main")

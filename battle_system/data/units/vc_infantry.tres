@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="SquadData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://battle_system/data/squad_data.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+display_name = "VC Infantry"
+unit_type = 9
+faction = 2
+squad_size = 10
+health_per_soldier = 80.0
+damage_per_second = 8.0
+attack_range = 20.0
+armor = 0.0
+move_speed = 5.5
+rotation_speed = 3.5
+sight_range = 25.0
+stealth_rating = 0.3
+can_build = false
+can_capture = false
+is_vehicle = false

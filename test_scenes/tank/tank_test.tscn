@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://b3xj5kn8q2cog"]
+
+[ext_resource type="Script" path="res://test_scenes/tank/tank_test.gd" id="1_main"]
+
+[node name="TankTest" type="Node3D"]
+script = ExtResource("1_main")

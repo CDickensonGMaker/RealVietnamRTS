@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="SquadData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://battle_system/data/squad_data.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+display_name = "Engineers"
+unit_type = 2
+faction = 0
+squad_size = 5
+health_per_soldier = 100.0
+damage_per_second = 8.0
+attack_range = 20.0
+armor = 0.0
+move_speed = 4.0
+rotation_speed = 3.0
+sight_range = 25.0
+stealth_rating = 0.0
+can_build = true
+can_capture = true
+is_vehicle = false

@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="SquadData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://battle_system/data/squad_data.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+display_name = "M113 APC"
+unit_type = 3
+faction = 0
+squad_size = 1
+health_per_soldier = 500.0
+damage_per_second = 15.0
+attack_range = 35.0
+armor = 30.0
+move_speed = 8.0
+rotation_speed = 2.0
+sight_range = 40.0
+stealth_rating = 0.0
+can_build = false
+can_capture = false
+is_vehicle = true

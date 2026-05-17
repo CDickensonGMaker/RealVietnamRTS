@@ -1,0 +1,72 @@
+[gd_scene load_steps=6 format=3 uid="uid://obs_tower_struct_01"]
+
+[ext_resource type="Script" path="res://scripts/structures/observation_tower.gd" id="1_obs_tower"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_1"]
+size = Vector3(2, 8, 2)
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_post"]
+top_radius = 0.15
+bottom_radius = 0.2
+height = 6.0
+
+[sub_resource type="BoxMesh" id="BoxMesh_platform"]
+size = Vector3(2, 0.3, 2)
+
+[sub_resource type="BoxMesh" id="BoxMesh_rail"]
+size = Vector3(0.1, 0.8, 2)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wood"]
+albedo_color = Color(0.4, 0.3, 0.2, 1)
+
+[node name="ObservationTower" type="StaticBody3D"]
+collision_layer = 4
+collision_mask = 0
+script = ExtResource("1_obs_tower")
+structure_name = "Observation Tower"
+max_health = 35.0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 0)
+shape = SubResource("BoxShape3D_1")
+
+[node name="Post1" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.7, 3, 0.7)
+mesh = SubResource("CylinderMesh_post")
+surface_material_override/0 = SubResource("StandardMaterial3D_wood")
+
+[node name="Post2" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7, 3, 0.7)
+mesh = SubResource("CylinderMesh_post")
+surface_material_override/0 = SubResource("StandardMaterial3D_wood")
+
+[node name="Post3" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.7, 3, -0.7)
+mesh = SubResource("CylinderMesh_post")
+surface_material_override/0 = SubResource("StandardMaterial3D_wood")
+
+[node name="Post4" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7, 3, -0.7)
+mesh = SubResource("CylinderMesh_post")
+surface_material_override/0 = SubResource("StandardMaterial3D_wood")
+
+[node name="Platform" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 6, 0)
+mesh = SubResource("BoxMesh_platform")
+surface_material_override/0 = SubResource("StandardMaterial3D_wood")
+
+[node name="Rail1" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.95, 6.5, 0)
+mesh = SubResource("BoxMesh_rail")
+surface_material_override/0 = SubResource("StandardMaterial3D_wood")
+
+[node name="Rail2" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.95, 6.5, 0)
+mesh = SubResource("BoxMesh_rail")
+surface_material_override/0 = SubResource("StandardMaterial3D_wood")
+
+[node name="SelectionIndicator" type="MeshInstance3D" parent="."]
+visible = false
+
+[node name="LookoutPoint" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 7, 0)

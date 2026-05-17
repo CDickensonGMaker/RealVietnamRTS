@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://b5xj5kn8q2cog"]
+
+[ext_resource type="Script" path="res://test_scenes/static_defenses/static_defenses_test.gd" id="1_main"]
+
+[node name="StaticDefensesTest" type="Node3D"]
+script = ExtResource("1_main")

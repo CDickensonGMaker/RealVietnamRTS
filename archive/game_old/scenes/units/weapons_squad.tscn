@@ -1,0 +1,54 @@
+[gd_scene load_steps=7 format=3 uid="uid://c9n4p6weapons"]
+
+[ext_resource type="Script" path="res://scripts/units/weapons_squad.gd" id="1_weapons"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_1"]
+radius = 1.0
+height = 2.0
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_1"]
+top_radius = 0.6
+bottom_radius = 0.9
+height = 1.6
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_squad"]
+albedo_color = Color(0.35, 0.35, 0.3, 1)
+
+[sub_resource type="TorusMesh" id="TorusMesh_selection"]
+inner_radius = 1.1
+outer_radius = 1.3
+rings = 16
+ring_segments = 8
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_selection"]
+albedo_color = Color(0.2, 1, 0.2, 1)
+emission_enabled = true
+emission = Color(0.2, 1, 0.2, 1)
+emission_energy_multiplier = 0.5
+
+[node name="WeaponsSquad" type="CharacterBody3D"]
+collision_layer = 2
+collision_mask = 7
+script = ExtResource("1_weapons")
+squad_name = "Weapons Squad"
+squad_size = 8
+max_squad_size = 8
+supply_cost = 35
+move_speed = 4.0
+sight_range = 35.0
+attack_range = 40.0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+shape = SubResource("CapsuleShape3D_1")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 0)
+mesh = SubResource("CylinderMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_squad")
+
+[node name="SelectionIndicator" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, -4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0.1, 0)
+visible = false
+mesh = SubResource("TorusMesh_selection")
+surface_material_override/0 = SubResource("StandardMaterial3D_selection")

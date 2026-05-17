@@ -1,0 +1,318 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://addons/model_viewer/model_viewer_dock.gd" id="1_script"]
+
+[node name="ModelViewerDock" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_script")
+
+[node name="HSplitContainer" type="HSplitContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_bottom = -30.0
+grow_horizontal = 2
+grow_vertical = 2
+split_offset = 220
+
+[node name="LeftPanel" type="PanelContainer" parent="HSplitContainer"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="HSplitContainer/LeftPanel"]
+layout_mode = 2
+
+[node name="TitleLabel" type="Label" parent="HSplitContainer/LeftPanel/VBoxContainer"]
+layout_mode = 2
+text = "Model Browser"
+horizontal_alignment = 1
+
+[node name="FolderContainer" type="HBoxContainer" parent="HSplitContainer/LeftPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="FolderLabel" type="Label" parent="HSplitContainer/LeftPanel/VBoxContainer/FolderContainer"]
+layout_mode = 2
+text = "Folder:"
+
+[node name="FolderDropdown" type="OptionButton" parent="HSplitContainer/LeftPanel/VBoxContainer/FolderContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="FilterContainer" type="HBoxContainer" parent="HSplitContainer/LeftPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="FilterLabel" type="Label" parent="HSplitContainer/LeftPanel/VBoxContainer/FilterContainer"]
+layout_mode = 2
+text = "Filter:"
+
+[node name="FilterLine" type="LineEdit" parent="HSplitContainer/LeftPanel/VBoxContainer/FilterContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Search..."
+
+[node name="ModelList" type="ItemList" parent="HSplitContainer/LeftPanel/VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="CenterPanel" type="VBoxContainer" parent="HSplitContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ViewportContainer" type="SubViewportContainer" parent="HSplitContainer/CenterPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+stretch = true
+
+[node name="SubViewport" type="SubViewport" parent="HSplitContainer/CenterPanel/ViewportContainer"]
+handle_input_locally = false
+size = Vector2i(800, 600)
+render_target_update_mode = 4
+
+[node name="Camera3D" type="Camera3D" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 5, 10)
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+transform = Transform3D(0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -0.5, 0.5, 0, 10, 0)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="AmbientLight" type="DirectionalLight3D" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+transform = Transform3D(1, 0, 0, 0, -0.5, 0.866025, 0, -0.866025, -0.5, 0, 5, 0)
+light_color = Color(0.7, 0.75, 0.85, 1)
+light_energy = 0.4
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+
+[node name="ModelRoot" type="Node3D" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+
+[node name="GridMesh" type="MeshInstance3D" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+
+[node name="ReferenceSoldier" type="MeshInstance3D" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+
+[node name="BoundsWireframe" type="MeshInstance3D" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+
+[node name="FacingArrow" type="MeshInstance3D" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+
+[node name="Ground" type="MeshInstance3D" parent="HSplitContainer/CenterPanel/ViewportContainer/SubViewport"]
+
+[node name="TogglePanel" type="HBoxContainer" parent="HSplitContainer/CenterPanel"]
+layout_mode = 2
+
+[node name="GridCheck" type="CheckButton" parent="HSplitContainer/CenterPanel/TogglePanel"]
+layout_mode = 2
+button_pressed = true
+text = "Grid"
+
+[node name="SoldierCheck" type="CheckButton" parent="HSplitContainer/CenterPanel/TogglePanel"]
+layout_mode = 2
+button_pressed = true
+text = "Soldier Ref"
+
+[node name="BoundsCheck" type="CheckButton" parent="HSplitContainer/CenterPanel/TogglePanel"]
+layout_mode = 2
+button_pressed = true
+text = "Bounds"
+
+[node name="ArrowCheck" type="CheckButton" parent="HSplitContainer/CenterPanel/TogglePanel"]
+layout_mode = 2
+button_pressed = true
+text = "Facing"
+
+[node name="RightPanel" type="PanelContainer" parent="HSplitContainer"]
+custom_minimum_size = Vector2(280, 0)
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="HSplitContainer/RightPanel"]
+layout_mode = 2
+
+[node name="TransformPanel" type="VBoxContainer" parent="HSplitContainer/RightPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="TransformTitle" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+text = "Transform"
+horizontal_alignment = 1
+
+[node name="ScaleLabel" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+text = "Scale (Uniform):"
+
+[node name="ScaleRow" type="HBoxContainer" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+
+[node name="ScaleSlider" type="HSlider" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/ScaleRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.1
+max_value = 5.0
+step = 0.01
+value = 1.0
+
+[node name="ScaleSpin" type="SpinBox" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/ScaleRow"]
+custom_minimum_size = Vector2(70, 0)
+layout_mode = 2
+min_value = 0.1
+max_value = 10.0
+step = 0.01
+value = 1.0
+
+[node name="RotationLabel" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+text = "Y Rotation (Facing):"
+
+[node name="RotationRow" type="HBoxContainer" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+
+[node name="RotationSlider" type="HSlider" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/RotationRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -180.0
+max_value = 180.0
+step = 1.0
+value = 0.0
+
+[node name="RotationSpin" type="SpinBox" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/RotationRow"]
+custom_minimum_size = Vector2(70, 0)
+layout_mode = 2
+min_value = -180.0
+max_value = 180.0
+step = 1.0
+value = 0.0
+suffix = "°"
+
+[node name="FacingLabel" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+text = "Facing Presets:"
+
+[node name="FacingPresets" type="HBoxContainer" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+
+[node name="FaceNorth" type="Button" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/FacingPresets"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "N (0°)"
+tooltip_text = "Face North (-Z direction)"
+
+[node name="FaceSouth" type="Button" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/FacingPresets"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "S (180°)"
+tooltip_text = "Face South (+Z direction)"
+
+[node name="FaceEast" type="Button" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/FacingPresets"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "E (-90°)"
+tooltip_text = "Face East (+X direction)"
+
+[node name="FaceWest" type="Button" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/FacingPresets"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "W (90°)"
+tooltip_text = "Face West (-X direction)"
+
+[node name="OffsetLabel" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+text = "Y Offset (Ground Level):"
+
+[node name="OffsetYRow" type="HBoxContainer" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+
+[node name="OffsetYSlider" type="HSlider" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/OffsetYRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -2.0
+max_value = 2.0
+step = 0.01
+value = 0.0
+
+[node name="OffsetYSpin" type="SpinBox" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel/OffsetYRow"]
+custom_minimum_size = Vector2(70, 0)
+layout_mode = 2
+min_value = -5.0
+max_value = 5.0
+step = 0.01
+value = 0.0
+suffix = "m"
+
+[node name="ResetButton" type="Button" parent="HSplitContainer/RightPanel/VBoxContainer/TransformPanel"]
+layout_mode = 2
+text = "Reset to Defaults"
+
+[node name="HSeparator" type="HSeparator" parent="HSplitContainer/RightPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="StatsPanel" type="VBoxContainer" parent="HSplitContainer/RightPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="StatsTitle" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/StatsPanel"]
+layout_mode = 2
+text = "Model Statistics"
+horizontal_alignment = 1
+
+[node name="StatsLabel" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/StatsPanel"]
+layout_mode = 2
+text = "Polygons: 0
+Vertices: 0
+Meshes: 0
+Materials: 0
+Nodes: 0"
+
+[node name="SizeLabel" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/StatsPanel"]
+layout_mode = 2
+text = "Size: 0.00m x 0.00m x 0.00m
+Rotation: 0 deg"
+
+[node name="HSeparator2" type="HSeparator" parent="HSplitContainer/RightPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="ExportPanel" type="VBoxContainer" parent="HSplitContainer/RightPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="ExportTitle" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/ExportPanel"]
+layout_mode = 2
+text = "Export / Apply"
+horizontal_alignment = 1
+
+[node name="ExportSceneButton" type="Button" parent="HSplitContainer/RightPanel/VBoxContainer/ExportPanel"]
+layout_mode = 2
+text = "Export as Scene (.tscn)"
+tooltip_text = "Create a new scene file with current transform baked in"
+
+[node name="UnitLabel" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/ExportPanel"]
+layout_mode = 2
+text = "Apply to Unit Data:"
+
+[node name="UnitDropdown" type="OptionButton" parent="HSplitContainer/RightPanel/VBoxContainer/ExportPanel"]
+layout_mode = 2
+
+[node name="ApplyUnitButton" type="Button" parent="HSplitContainer/RightPanel/VBoxContainer/ExportPanel"]
+layout_mode = 2
+text = "Save Transform to Unit"
+tooltip_text = "Store scale, rotation, offset in the unit data file"
+
+[node name="InfoLabel" type="Label" parent="HSplitContainer/RightPanel/VBoxContainer/ExportPanel"]
+layout_mode = 2
+text = "Note: Transforms saved to unit data
+will be applied at spawn time."
+horizontal_alignment = 1
+
+[node name="BottomPanel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -30.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="StatusLabel" type="Label" parent="BottomPanel"]
+layout_mode = 2
+text = "Ready - Select a model to view | Middle Mouse: Orbit | Scroll: Zoom"

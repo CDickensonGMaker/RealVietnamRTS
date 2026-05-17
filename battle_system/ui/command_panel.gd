@@ -1,0 +1,452 @@
+extends PanelContainer
+class_name CommandPanel
+## Bottom-right button grid for context-sensitive commands.
+## Uses Company of Heroes / Sudden Strike style layout:
+##   - Row 1: Universal commands (Move, Hold, Stop, Patrol) - always visible
+##   - Row 2: Contextual commands (Build, Repair, Mines, Special) - unit-dependent
+##   - Row 3: Unit-type specific abilities
+##
+## Basic infantry have NO special abilities to keep micro simple per game design.
+
+const MilitaryTheme = preload("res://battle_system/ui/military_theme.gd")
+const CursorModeScript = preload("res://battle_system/ui/cursor_mode.gd")
+
+# =============================================================================
+# SIGNALS
+# =============================================================================
+
+## Emitted when a command button is pressed
+signal command_pressed(command_name: String)
+
+## Emitted when build submenu is opened
+signal build_menu_requested()
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+const PANEL_WIDTH: float = 296.0
+const PANEL_HEIGHT: float = 180.0
+const BUTTON_SIZE: float = 56.0
+const GRID_COLS: int = 4
+const ROW_SPACING: int = 4
+
+# =============================================================================
+# COMMAND DEFINITIONS - ROW 1: UNIVERSAL (always visible)
+# =============================================================================
+
+const UNIVERSAL_COMMANDS: Array[Dictionary] = [
+	{"name": "move", "label": "MOVE", "hotkey": "M", "icon_color": Color(0.3, 0.8, 0.3)},
+	{"name": "hold", "label": "HOLD", "hotkey": "H", "icon_color": Color(0.6, 0.6, 0.8)},
+	{"name": "stop", "label": "STOP", "hotkey": "S", "icon_color": Color(0.8, 0.8, 0.8)},
+	{"name": "patrol", "label": "PATROL", "hotkey": "P", "icon_color": Color(0.5, 0.7, 0.9)},
+]
+
+# =============================================================================
+# COMMAND DEFINITIONS - ROW 2: CONTEXTUAL (unit capability based)
+# =============================================================================
+
+## Engineer capabilities
+const CMD_BUILD := {"name": "build", "label": "BUILD", "hotkey": "B", "icon_color": Color(0.5, 0.6, 0.4)}
+const CMD_REPAIR := {"name": "repair", "label": "REPAIR", "hotkey": "R", "icon_color": Color(0.6, 0.7, 0.3)}
+const CMD_MINES := {"name": "mines", "label": "MINES", "hotkey": "N", "icon_color": Color(0.7, 0.5, 0.3)}
+const CMD_CLEAR := {"name": "clear", "label": "CLEAR", "hotkey": "C", "icon_color": Color(0.6, 0.4, 0.2)}
+
+## Bulldozer capabilities
+const CMD_DOZER_CLEAR := {"name": "dozer_clear", "label": "GRADE", "hotkey": "G", "icon_color": Color(0.7, 0.5, 0.2)}
+const CMD_FLATTEN := {"name": "flatten", "label": "FLATTEN", "hotkey": "F", "icon_color": Color(0.5, 0.5, 0.3)}
+
+## Bunker/structure commands
+const CMD_GARRISON := {"name": "garrison", "label": "ENTER", "hotkey": "G", "icon_color": Color(0.4, 0.5, 0.6)}
+const CMD_UNLOAD := {"name": "unload", "label": "EXIT", "hotkey": "U", "icon_color": Color(0.6, 0.5, 0.4)}
+
+## Transport commands (helicopters, trucks, APCs)
+const CMD_LOAD := {"name": "load", "label": "LOAD", "hotkey": "L", "icon_color": Color(0.4, 0.6, 0.5)}
+const CMD_UNLOAD_CARGO := {"name": "unload", "label": "UNLOAD", "hotkey": "U", "icon_color": Color(0.6, 0.5, 0.4)}
+
+## Attack move (available to all combat units)
+const CMD_ATTACK_MOVE := {"name": "attack_move", "label": "A-MOVE", "hotkey": "A", "icon_color": Color(0.9, 0.5, 0.2)}
+
+# =============================================================================
+# COMMAND DEFINITIONS - ROW 3: UNIT-TYPE SPECIFIC
+# =============================================================================
+
+## Artillery commands (when deployed)
+const ARTILLERY_DEPLOYED_COMMANDS: Array[Dictionary] = [
+	{"name": "fire_mission", "label": "FIRE", "hotkey": "F", "icon_color": Color(0.9, 0.3, 0.2)},
+	{"name": "pack_up", "label": "PACK UP", "hotkey": "K", "icon_color": Color(0.5, 0.5, 0.5)},
+]
+
+## Artillery commands (when packed)
+const ARTILLERY_PACKED_COMMANDS: Array[Dictionary] = [
+	{"name": "deploy", "label": "DEPLOY", "hotkey": "D", "icon_color": Color(0.4, 0.6, 0.4)},
+]
+
+## Airplane commands (idle at airport)
+const AIRPLANE_IDLE_COMMANDS: Array[Dictionary] = [
+	{"name": "takeoff", "label": "TAKE OFF", "hotkey": "T", "icon_color": Color(0.4, 0.6, 0.8)},
+]
+
+## Airplane commands (in flight)
+const AIRPLANE_FLYING_COMMANDS: Array[Dictionary] = [
+	{"name": "bomb", "label": "BOMB", "hotkey": "1", "icon_color": Color(0.9, 0.3, 0.2)},
+	{"name": "napalm", "label": "NAPALM", "hotkey": "2", "icon_color": Color(0.9, 0.5, 0.2)},
+	{"name": "rockets", "label": "ROCKETS", "hotkey": "3", "icon_color": Color(0.7, 0.3, 0.2)},
+	{"name": "rtb", "label": "RTB", "hotkey": "0", "icon_color": Color(0.5, 0.5, 0.7)},
+]
+
+## Tank / Vehicle commands
+const VEHICLE_COMMANDS: Array[Dictionary] = [
+	{"name": "reverse", "label": "REVERSE", "hotkey": "V", "icon_color": Color(0.6, 0.6, 0.5)},
+]
+
+# =============================================================================
+# STATE
+# =============================================================================
+
+var _current_selection: Array[Node3D] = []
+var _row_containers: Array[HBoxContainer] = []
+var _buttons: Dictionary = {}  # command_name -> Button
+var _hotkey_map: Dictionary = {}  # hotkey_char -> command_name
+
+## Cached autoload reference
+var _selection_manager: Node = null
+
+
+func _ready() -> void:
+	# Cache autoload reference
+	_selection_manager = get_node_or_null("/root/SelectionManager")
+
+	custom_minimum_size = Vector2(PANEL_WIDTH, PANEL_HEIGHT)
+
+	# CRITICAL: Stop mouse events from propagating through to SelectionManager
+	# This prevents clicking command buttons from clearing the current selection
+	mouse_filter = Control.MOUSE_FILTER_STOP
+
+	_setup_theme()
+	_build_ui()
+
+	# Connect to selection changes
+	if BattleSignals:
+		BattleSignals.selection_changed.connect(_on_selection_changed)
+
+	# Initialize hidden
+	visible = false
+
+
+func _setup_theme() -> void:
+	var panel_style: StyleBoxFlat = MilitaryTheme.create_panel_stylebox()
+	add_theme_stylebox_override("panel", panel_style)
+
+
+func _build_ui() -> void:
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 4)
+	margin.add_theme_constant_override("margin_top", 4)
+	margin.add_theme_constant_override("margin_right", 4)
+	margin.add_theme_constant_override("margin_bottom", 4)
+	add_child(margin)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", ROW_SPACING)
+	margin.add_child(vbox)
+
+	# Create 3 rows for commands
+	for i in 3:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", ROW_SPACING)
+		vbox.add_child(row)
+		_row_containers.append(row)
+
+
+func _on_selection_changed(_selected: Array = []) -> void:
+	# Get current selection from SelectionManager
+	if _selection_manager and _selection_manager.has_method("get_selected_units"):
+		_current_selection = _selection_manager.get_selected_units()
+	else:
+		_current_selection = []
+
+	# Toggle visibility
+	visible = _current_selection.size() > 0
+
+	# Rebuild button grid
+	_rebuild_buttons()
+
+
+func _rebuild_buttons() -> void:
+	# Clear existing buttons and hotkey map
+	for row in _row_containers:
+		for child in row.get_children():
+			child.queue_free()
+	_buttons.clear()
+	_hotkey_map.clear()
+
+	if _current_selection.is_empty():
+		return
+
+	# Analyze selection for capabilities
+	var selection_info: Dictionary = _analyze_selection()
+
+	# === ROW 1: Universal Commands (always visible) ===
+	for cmd in UNIVERSAL_COMMANDS:
+		_create_command_button(_row_containers[0], cmd)
+
+	# === ROW 2: Contextual Commands (based on unit capabilities) ===
+	var row2_commands: Array[Dictionary] = []
+
+	# Attack-move for combat units
+	if selection_info.has_combat_units:
+		row2_commands.append(CMD_ATTACK_MOVE)
+
+	# Engineer capabilities
+	if selection_info.has_engineer:
+		row2_commands.append(CMD_BUILD)
+		row2_commands.append(CMD_CLEAR)
+
+	# Bulldozer capabilities (separate from engineer)
+	if selection_info.has_bulldozer:
+		row2_commands.append(CMD_DOZER_CLEAR)
+		row2_commands.append(CMD_FLATTEN)
+
+	# Bunker / garrison capability
+	if selection_info.has_bunker:
+		row2_commands.append(CMD_GARRISON)
+		row2_commands.append(CMD_UNLOAD)
+
+	# Transport capability
+	if selection_info.has_transport:
+		if not CMD_LOAD in row2_commands:
+			row2_commands.append(CMD_LOAD)
+		if not CMD_UNLOAD_CARGO in row2_commands:
+			row2_commands.append(CMD_UNLOAD_CARGO)
+
+	# Add Row 2 buttons (max 4)
+	for i in mini(row2_commands.size(), GRID_COLS):
+		_create_command_button(_row_containers[1], row2_commands[i])
+
+	# Hide row 2 if empty
+	_row_containers[1].visible = row2_commands.size() > 0
+
+	# === ROW 3: Unit-Type Specific Commands ===
+	var row3_commands: Array[Dictionary] = []
+
+	# Artillery (deployed)
+	if selection_info.has_artillery_deployed:
+		row3_commands.append_array(ARTILLERY_DEPLOYED_COMMANDS)
+
+	# Artillery (packed)
+	if selection_info.has_artillery_packed:
+		row3_commands.append_array(ARTILLERY_PACKED_COMMANDS)
+
+	# Airplane (idle)
+	if selection_info.has_airplane_idle:
+		row3_commands.append_array(AIRPLANE_IDLE_COMMANDS)
+
+	# Airplane (flying)
+	if selection_info.has_airplane_flying:
+		row3_commands.append_array(AIRPLANE_FLYING_COMMANDS)
+
+	# Vehicle commands
+	if selection_info.has_vehicle and not selection_info.has_transport:
+		row3_commands.append_array(VEHICLE_COMMANDS)
+
+	# Add Row 3 buttons (max 4)
+	for i in mini(row3_commands.size(), GRID_COLS):
+		_create_command_button(_row_containers[2], row3_commands[i])
+
+	# Hide row 3 if empty
+	_row_containers[2].visible = row3_commands.size() > 0
+
+	# Adjust panel height based on visible rows
+	_update_panel_size()
+
+
+func _analyze_selection() -> Dictionary:
+	var info: Dictionary = {
+		"has_engineer": false,
+		"has_bulldozer": false,
+		"has_bunker": false,
+		"has_artillery_deployed": false,
+		"has_artillery_packed": false,
+		"has_helicopter": false,
+		"has_airplane_idle": false,
+		"has_airplane_flying": false,
+		"has_vehicle": false,
+		"has_transport": false,
+		"has_combat_units": false,
+		"has_basic_infantry": false,
+	}
+
+	for unit in _current_selection:
+		if not is_instance_valid(unit):
+			continue
+
+		# Check unit type by groups and properties
+		if unit.is_in_group("bunkers"):
+			info.has_bunker = true
+
+		if unit.is_in_group("vehicles"):
+			info.has_vehicle = true
+
+		if unit.is_in_group("transports") or unit.is_in_group("helicopters"):
+			info.has_transport = true
+
+		if unit.has_method("get"):
+			# Check for engineer capability
+			var data: Resource = unit.get("data")
+			if data:
+				if "can_build" in data and data.can_build:
+					# Check if it's a bulldozer (vehicle that can build) or engineer
+					if "is_vehicle" in data and data.is_vehicle:
+						info.has_bulldozer = true
+					else:
+						info.has_engineer = true
+
+				# Check if basic infantry (no special abilities)
+				if "unit_type" in data:
+					var unit_type: int = data.unit_type
+					# Basic infantry types don't get special abilities
+					if unit_type == 0:  # RIFLE_SQUAD type
+						info.has_basic_infantry = true
+					# Check for BULLDOZER type (unit_type = 3)
+					if unit_type == 3:  # BULLDOZER type
+						info.has_bulldozer = true
+
+				# Check for combat capability
+				if "attack_range" in data and data.attack_range > 0:
+					info.has_combat_units = true
+
+			# Check for artillery state
+			if unit.is_in_group("artillery"):
+				var art_state: Variant = unit.get("state")
+				if art_state != null:
+					if art_state == GameEnums.ArtilleryState.DEPLOYED:
+						info.has_artillery_deployed = true
+					elif art_state == GameEnums.ArtilleryState.PACKED:
+						info.has_artillery_packed = true
+
+			# Check helicopter
+			if unit.is_in_group("helicopters"):
+				info.has_helicopter = true
+				info.has_transport = true
+
+			# Check airplane
+			if unit.is_in_group("airplanes"):
+				var plane_state: Variant = unit.get("state")
+				if plane_state != null:
+					if plane_state == GameEnums.AirplaneState.IDLE_AT_AIRPORT:
+						info.has_airplane_idle = true
+					elif plane_state == GameEnums.AirplaneState.PATROLLING or plane_state == GameEnums.AirplaneState.ATTACK_RUN:
+						info.has_airplane_flying = true
+
+	return info
+
+
+func _update_panel_size() -> void:
+	var visible_rows: int = 0
+	for row in _row_containers:
+		if row.visible and row.get_child_count() > 0:
+			visible_rows += 1
+
+	var new_height: float = 8.0 + (visible_rows * (BUTTON_SIZE + ROW_SPACING))
+	custom_minimum_size.y = new_height
+
+
+func _create_command_button(parent: Control, cmd: Dictionary) -> void:
+	var button := Button.new()
+	button.custom_minimum_size = Vector2(BUTTON_SIZE, BUTTON_SIZE)
+
+	# Vertical layout
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.add_theme_constant_override("separation", 2)
+	button.add_child(vbox)
+
+	# Icon placeholder (28x28 ColorRect)
+	var icon_container := CenterContainer.new()
+	icon_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(icon_container)
+
+	var icon_slot := ColorRect.new()
+	icon_slot.name = "IconSlot"
+	icon_slot.custom_minimum_size = Vector2(28, 28)
+	icon_slot.color = cmd.get("icon_color", Color(0.5, 0.5, 0.5))
+	icon_container.add_child(icon_slot)
+
+	# Label
+	var label := Label.new()
+	label.text = cmd.get("label", "CMD")
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 8)
+	label.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_PRIMARY)
+	vbox.add_child(label)
+
+	# Hotkey hint (top-right)
+	var hotkey := Label.new()
+	hotkey.text = cmd.get("hotkey", "")
+	hotkey.add_theme_font_size_override("font_size", 8)
+	hotkey.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_SECONDARY)
+	hotkey.position = Vector2(BUTTON_SIZE - 12, 2)
+	button.add_child(hotkey)
+
+	# Apply button theme
+	button.add_theme_stylebox_override("normal", MilitaryTheme.create_button_stylebox("normal"))
+	button.add_theme_stylebox_override("hover", MilitaryTheme.create_button_stylebox("hover"))
+	button.add_theme_stylebox_override("pressed", MilitaryTheme.create_button_stylebox("pressed"))
+
+	# Connect press signal
+	var cmd_name: String = cmd.get("name", "")
+	button.pressed.connect(_on_button_pressed.bind(cmd_name))
+
+	parent.add_child(button)
+	_buttons[cmd_name] = button
+
+	# Register hotkey in mapping
+	var hotkey_char: String = cmd.get("hotkey", "")
+	if not hotkey_char.is_empty():
+		_hotkey_map[hotkey_char.to_upper()] = cmd_name
+
+
+func _on_button_pressed(command_name: String) -> void:
+	command_pressed.emit(command_name)
+	print("[CommandPanel] Command: %s" % command_name)
+
+
+func _input(event: InputEvent) -> void:
+	if not visible:
+		return
+
+	# Handle hotkey shortcuts using mapping (efficient lookup)
+	if event is InputEventKey and event.pressed and not event.echo:
+		var key_char: String = OS.get_keycode_string(event.keycode).to_upper()
+
+		# Direct lookup in hotkey map
+		if key_char in _hotkey_map:
+			_on_button_pressed(_hotkey_map[key_char])
+			get_viewport().set_input_as_handled()
+			return
+
+
+# =============================================================================
+# PUBLIC API
+# =============================================================================
+
+## Enable or disable a specific command button
+func set_command_enabled(command_name: String, enabled: bool) -> void:
+	if command_name in _buttons:
+		_buttons[command_name].disabled = not enabled
+
+
+## Highlight a command button (for mode indication)
+func set_command_highlighted(command_name: String, highlighted: bool) -> void:
+	if command_name in _buttons:
+		var button: Button = _buttons[command_name]
+		if highlighted:
+			button.add_theme_stylebox_override("normal", MilitaryTheme.create_button_stylebox("pressed"))
+		else:
+			button.add_theme_stylebox_override("normal", MilitaryTheme.create_button_stylebox("normal"))
+
+
+## Force refresh the command panel (call after unit state changes)
+func refresh() -> void:
+	_rebuild_buttons()

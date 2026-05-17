@@ -1,0 +1,38 @@
+[gd_scene load_steps=3 format=3 uid="uid://test_arena_scene"]
+
+[ext_resource type="Script" path="res://scenes/test_arena.gd" id="1_arena"]
+[ext_resource type="Script" path="res://battle_system/camera/rts_camera.gd" id="2_camera"]
+
+[node name="TestArena" type="Node3D"]
+script = ExtResource("1_arena")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.433, 0.25, 0, 0.5, 0.866, -0.5, -0.75, 0.433, 0, 30, 0)
+light_color = Color(1, 0.95, 0.85, 1)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="AmbientLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 10, 0)
+light_color = Color(0.6, 0.7, 0.8, 1)
+light_energy = 0.3
+
+[node name="RTSCamera" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.707, 0.707, 0, -0.707, 0.707, 0, 25, 20)
+fov = 60.0
+script = ExtResource("2_camera")
+pan_speed = 20.0
+zoom_speed = 2.0
+min_zoom = 8.0
+max_zoom = 50.0
+map_bounds_min = Vector3(-60, 0, -35)
+map_bounds_max = Vector3(60, 0, 35)
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="Environment" type="Environment" parent="WorldEnvironment"]
+background_mode = 1
+background_color = Color(0.4, 0.5, 0.6, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.5, 0.55, 0.6, 1)
+ambient_light_energy = 0.5

@@ -1,0 +1,116 @@
+[gd_scene load_steps=12 format=3 uid="uid://c8qrx5kh2mfvl"]
+
+[ext_resource type="Script" path="res://helicopter_system/test/heli_shuttle_test.gd" id="1_main"]
+[ext_resource type="Script" path="res://helicopter_system/test/shuttle_helicopter.gd" id="2_heli"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
+sky_top_color = Color(0.4, 0.6, 0.8, 1)
+sky_horizon_color = Color(0.7, 0.8, 0.9, 1)
+ground_bottom_color = Color(0.2, 0.25, 0.2, 1)
+ground_horizon_color = Color(0.5, 0.55, 0.5, 1)
+
+[sub_resource type="Sky" id="Sky_main"]
+sky_material = SubResource("ProceduralSkyMaterial_sky")
+
+[sub_resource type="Environment" id="Environment_main"]
+background_mode = 2
+sky = SubResource("Sky_main")
+ambient_light_source = 2
+ambient_light_color = Color(0.4, 0.45, 0.5, 1)
+ambient_light_energy = 0.5
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ground"]
+size = Vector3(150, 0.5, 150)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ground"]
+albedo_color = Color(0.25, 0.35, 0.2, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_ground"]
+size = Vector3(150, 0.5, 150)
+material = SubResource("StandardMaterial3D_ground")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_loading_zone"]
+transparency = 1
+albedo_color = Color(0.2, 0.8, 0.2, 0.4)
+shading_mode = 0
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_loading_zone"]
+top_radius = 10.0
+bottom_radius = 10.0
+height = 0.1
+material = SubResource("StandardMaterial3D_loading_zone")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_dest_lz"]
+transparency = 1
+albedo_color = Color(0.2, 0.4, 0.9, 0.4)
+shading_mode = 0
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_dest_lz"]
+top_radius = 10.0
+bottom_radius = 10.0
+height = 0.1
+material = SubResource("StandardMaterial3D_dest_lz")
+
+[node name="HeliShuttleTest" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="Environment" type="Node3D" parent="."]
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="Environment"]
+transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 20, 40, 20)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="Environment"]
+environment = SubResource("Environment_main")
+
+[node name="Ground" type="StaticBody3D" parent="Environment"]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Environment/Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
+shape = SubResource("BoxShape3D_ground")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Environment/Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Zones" type="Node3D" parent="."]
+
+[node name="LoadingZone" type="Node3D" parent="Zones"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -30, 0, 0)
+
+[node name="ZoneMarker" type="MeshInstance3D" parent="Zones/LoadingZone"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.05, 0)
+mesh = SubResource("CylinderMesh_loading_zone")
+
+[node name="ZoneLabel" type="Label3D" parent="Zones/LoadingZone"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, -12)
+text = "LOADING ZONE"
+font_size = 48
+outline_size = 8
+
+[node name="DestinationLZ" type="Node3D" parent="Zones"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 30, 0, 0)
+
+[node name="ZoneMarker" type="MeshInstance3D" parent="Zones/DestinationLZ"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.05, 0)
+mesh = SubResource("CylinderMesh_dest_lz")
+
+[node name="ZoneLabel" type="Label3D" parent="Zones/DestinationLZ"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, -12)
+text = "DESTINATION LZ"
+font_size = 48
+outline_size = 8
+modulate = Color(0.4, 0.6, 1, 1)
+
+[node name="Units" type="Node3D" parent="."]
+
+[node name="Squads" type="Node3D" parent="Units"]
+
+[node name="Helicopter" type="CharacterBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -30, 1.5, 0)
+script = ExtResource("2_heli")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.707, 0.707, 0, -0.707, 0.707, 0, 50, 50)
+fov = 60.0
