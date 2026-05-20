@@ -28,10 +28,10 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.CONEX_BUNKER: "res://assets/models/structures/firebase/conex_bunker.glb",
 	BuildingData.BuildingType.MACHINE_GUN_NEST: "res://assets/models/structures/mg_nest.glb",
 	BuildingData.BuildingType.MORTAR_PIT: "res://assets/models/structures/converted/mortar_pit.glb",
-	BuildingData.BuildingType.WIRE_OBSTACLE: "res://assets/models/structures/converted/wire_obstacle.glb",
+	BuildingData.BuildingType.WIRE_OBSTACLE: "res://assets/models/structures/converted/barbed_wire.glb",
 	BuildingData.BuildingType.TRIPLE_CONCERTINA: "res://assets/models/structures/firebase/triple_concertina.glb",
 	BuildingData.BuildingType.CLAYMORE_LINE: "res://assets/models/structures/converted/claymore_line.glb",
-	BuildingData.BuildingType.WATCHTOWER: "res://assets/models/structures/converted/watchtower.glb",
+	BuildingData.BuildingType.WATCHTOWER: "res://models/Watchtower.glb",
 
 	# =========================================================================
 	# FIREBASE SUPPORT
@@ -64,7 +64,7 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.ARTILLERY_PIT: "res://assets/models/structures/converted/artillery_pit.glb",
 	BuildingData.BuildingType.HOWITZER_PIT_105MM: "res://assets/models/structures/firebase/howitzer_pit_105.glb",
 	BuildingData.BuildingType.HOWITZER_PIT_155MM: "res://assets/models/structures/firebase/howitzer_pit_155.glb",
-	BuildingData.BuildingType.FIRE_DIRECTION_CENTER: "res://assets/models/structures/firebase/fdc.glb",
+	BuildingData.BuildingType.FIRE_DIRECTION_CENTER: "res://assets/models/structures/firebase/fire_direction_center.glb",
 	BuildingData.BuildingType.TANK_REVETMENT: "res://assets/models/structures/converted/tank_revetment.glb",
 	BuildingData.BuildingType.OPEN_REVETMENT: "res://assets/models/structures/firebase/open_revetment.glb",
 
@@ -101,11 +101,11 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.MAINTENANCE_SHOP: "res://assets/models/structures/airfield/maintenance_shop.glb",
 	BuildingData.BuildingType.CONTROL_TOWER: "res://assets/models/structures/airfield/control_tower.glb",
 	BuildingData.BuildingType.RADAR_DOME: "res://assets/models/structures/airfield/radar_dome.glb",
-	BuildingData.BuildingType.OPERATIONS_BUILDING: "res://assets/models/structures/airfield/ops_building.glb",
+	BuildingData.BuildingType.OPERATIONS_BUILDING: "res://assets/models/structures/airfield/operations_building.glb",
 	BuildingData.BuildingType.POL_STORAGE: "res://assets/models/structures/airfield/pol_storage.glb",
 	BuildingData.BuildingType.FIRE_STATION: "res://assets/models/structures/airfield/fire_station.glb",
 	BuildingData.BuildingType.AMMO_STORAGE_AIRFIELD: "res://assets/models/structures/airfield/ammo_storage.glb",
-	BuildingData.BuildingType.QUONSET_HUT: "res://assets/models/structures/airfield/quonset_hut.glb",
+	BuildingData.BuildingType.QUONSET_HUT: "res://assets/models/structures/firebase/quonset_hut.glb",
 	BuildingData.BuildingType.SUPPLY_WAREHOUSE: "res://assets/models/structures/airfield/warehouse.glb",
 	BuildingData.BuildingType.AMMO_DUMP_BUNKER: "res://assets/models/structures/airfield/ammo_dump.glb",
 	BuildingData.BuildingType.POL_TANK_FARM: "res://assets/models/structures/airfield/tank_farm.glb",
@@ -115,8 +115,8 @@ const BUILDING_MODELS: Dictionary = {
 	# =========================================================================
 	BuildingData.BuildingType.COLONIAL_VILLA: "res://assets/models/structures/colonial/villa.glb",
 	BuildingData.BuildingType.PLANTATION_HOUSE: "res://assets/models/structures/colonial/plantation_house.glb",
-	BuildingData.BuildingType.GOVERNMENT_BUILDING: "res://assets/models/structures/colonial/government.glb",
-	BuildingData.BuildingType.FRENCH_BARRACKS: "res://assets/models/structures/colonial/barracks.glb",
+	BuildingData.BuildingType.GOVERNMENT_BUILDING: "res://assets/models/structures/colonial/government_building.glb",
+	BuildingData.BuildingType.FRENCH_BARRACKS: "res://assets/models/structures/colonial/french_barracks.glb",
 	BuildingData.BuildingType.COLONIAL_PRISON: "res://assets/models/structures/colonial/prison.glb",
 	BuildingData.BuildingType.RUBBER_PLANT: "res://assets/models/structures/colonial/rubber_plant.glb",
 	BuildingData.BuildingType.COLONIAL_WAREHOUSE: "res://assets/models/structures/colonial/warehouse.glb",
@@ -129,8 +129,8 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.STEEL_TRUSS_BRIDGE: "res://assets/models/structures/infrastructure/steel_bridge.glb",
 	BuildingData.BuildingType.WOODEN_BRIDGE: "res://assets/models/structures/infrastructure/wooden_bridge.glb",
 	BuildingData.BuildingType.PONTOON_BRIDGE: "res://assets/models/structures/infrastructure/pontoon_bridge.glb",
-	BuildingData.BuildingType.STONE_ARCH_BRIDGE: "res://assets/models/structures/infrastructure/stone_bridge.glb",
-	BuildingData.BuildingType.DOCK_PIER: "res://assets/models/structures/infrastructure/dock.glb",
+	BuildingData.BuildingType.STONE_ARCH_BRIDGE: "res://assets/models/structures/infrastructure/stone_arch_bridge.glb",
+	BuildingData.BuildingType.DOCK_PIER: "res://assets/models/structures/infrastructure/dock_pier.glb",
 	BuildingData.BuildingType.CARGO_CRANE: "res://assets/models/structures/infrastructure/crane.glb",
 	BuildingData.BuildingType.CONTAINER_YARD: "res://assets/models/structures/infrastructure/container_yard.glb",
 	BuildingData.BuildingType.DIRT_ROAD_SECTION: "res://assets/models/structures/infrastructure/dirt_road.glb",
@@ -141,7 +141,7 @@ const BUILDING_MODELS: Dictionary = {
 	# =========================================================================
 	# VC/NVA SPECIAL
 	# =========================================================================
-	BuildingData.BuildingType.TUNNEL_ENTRANCE_HIDDEN: "res://assets/models/structures/vc_nva/tunnel_hidden.glb",
+	BuildingData.BuildingType.TUNNEL_ENTRANCE_HIDDEN: "res://assets/models/structures/vc_nva/tunnel_entrance_hidden.glb",
 	BuildingData.BuildingType.TUNNEL_ENTRANCE_EXPOSED: "res://assets/models/structures/vc_nva/tunnel_exposed.glb",
 	BuildingData.BuildingType.SPIDER_HOLE: "res://assets/models/structures/vc_nva/spider_hole.glb",
 	BuildingData.BuildingType.PUNJI_PIT: "res://assets/models/structures/vc_nva/punji_pit.glb",
@@ -161,7 +161,7 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.DESTROYED_VILLAGE: "res://assets/models/structures/ruins/destroyed_village.glb",
 	BuildingData.BuildingType.BOMBED_PAGODA: "res://assets/models/structures/ruins/bombed_pagoda.glb",
 	BuildingData.BuildingType.CRATERED_RUNWAY: "res://assets/models/structures/ruins/cratered_runway.glb",
-	BuildingData.BuildingType.BURNED_BUNKER: "res://assets/models/structures/ruins/burned_bunker.glb",
+	BuildingData.BuildingType.BURNED_BUNKER: "res://assets/models/structures/ruins/destroyed_bunker.glb",
 	BuildingData.BuildingType.DESTROYED_BRIDGE: "res://assets/models/structures/ruins/destroyed_bridge.glb",
 	BuildingData.BuildingType.RUBBLE_PILE: "res://assets/models/structures/ruins/rubble_pile.glb",
 	BuildingData.BuildingType.CONEX_CELL: "res://assets/models/structures/vc_nva/conex_cell.glb",
@@ -180,6 +180,11 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.SHOP_HOUSE: "res://assets/models/structures/commercial/shop_house.glb",
 	BuildingData.BuildingType.MARKET_STALL: "res://assets/models/structures/commercial/market_stall.glb",
 	BuildingData.BuildingType.FOOD_VENDOR_CART: "res://assets/models/structures/commercial/vendor_cart.glb",
+
+	# =========================================================================
+	# FIREBASE LOGISTICS
+	# =========================================================================
+	BuildingData.BuildingType.SUPPLY_DEPOT: "res://assets/models/structures/us/us_supply_depot.glb",
 }
 
 ## Configuration
@@ -350,7 +355,29 @@ func _complete_construction() -> void:
 
 func _create_building() -> Node3D:
 	"""Create the completed building node"""
-	var building := Node3D.new()
+	var building: Node3D
+
+	# Special case: Supply Depot uses its own class with full functionality
+	if building_data.building_type == BuildingData.BuildingType.SUPPLY_DEPOT:
+		var SupplyDepotClass = load("res://firebase_system/supply_depot.gd")
+		if SupplyDepotClass:
+			building = SupplyDepotClass.new()
+			building.name = "Supply_Depot"
+			# Load the model into the SupplyDepot
+			if building_data.building_type in BUILDING_MODELS:
+				var model_path: String = BUILDING_MODELS[building_data.building_type]
+				if ResourceLoader.exists(model_path):
+					var model_scene: PackedScene = load(model_path)
+					if model_scene:
+						var model_instance: Node3D = model_scene.instantiate()
+						building.add_child(model_instance)
+						print("[ConstructionZone] Loaded Supply Depot model: ", model_path)
+			add_child(building)
+			building.position = Vector3.ZERO
+			return building
+
+	# Default: create generic Node3D for other building types
+	building = Node3D.new()
 	building.name = building_data.display_name.replace(" ", "_")
 
 	# Try to load GLB model first
@@ -411,6 +438,33 @@ func _create_building() -> Node3D:
 
 	add_child(building)
 	building.position = Vector3.ZERO
+
+	# Add garrison component if building has garrison capacity
+	if building_data.garrison_capacity > 0:
+		var garrison_script = load("res://fortification_system/garrisonable_structure.gd")
+		if garrison_script:
+			var garrison: Node = garrison_script.new()
+			garrison.name = "GarrisonableStructure"
+			garrison.max_infantry = building_data.garrison_capacity
+			# Set structure type based on building category
+			if building_data.category == BuildingData.BuildingCategory.FIREBASE_PERIMETER:
+				garrison.structure_type = 0  # BUNKER type
+			building.add_child(garrison)
+
+	# Add auto-defense component if building has auto_attacks
+	if building_data.auto_attacks and not building_data.defense_weapon.is_empty():
+		var defense_script = load("res://fortification_system/defensive_structure.gd")
+		if defense_script:
+			var defense: Node = defense_script.new()
+			defense.name = "DefensiveStructure"
+			defense.weapon_type = building_data.defense_weapon
+			defense.defense_type = building_data.defense_type
+			defense.attack_range = building_data.attack_range
+			defense.requires_garrison = building_data.requires_garrison_to_fire
+			building.add_child(defense)
+			print("[ConstructionZone] Added auto-defense to %s (weapon: %s, range: %.0fm)" % [
+				building_data.display_name, building_data.defense_weapon, building_data.attack_range
+			])
 
 	return building
 

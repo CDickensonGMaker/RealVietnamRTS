@@ -173,6 +173,11 @@ enum BuildingType {
 	SHOP_HOUSE,             # 111 - Two-story merchant building
 	MARKET_STALL,           # 112 - Simple vendor booth
 	FOOD_VENDOR_CART,       # 113 - Mobile street food
+
+	# -------------------------------------------------------------------------
+	# FIREBASE LOGISTICS (114+)
+	# -------------------------------------------------------------------------
+	SUPPLY_DEPOT,           # 114 - Main supply storage and distribution hub
 }
 
 # =============================================================================
@@ -233,6 +238,10 @@ enum BuildingCategory {
 @export var provides_cover: bool = true
 @export var cover_value: float = 0.5
 
+## Logistics System (Three Pillars)
+@export var morale_bonus: int = 0  ## QoL buildings provide morale
+@export var is_water_source: bool = false  ## Provides water to firebase
+
 ## Requirements
 @export var requires_cleared_terrain: bool = true
 @export var requires_firebase_level: int = 0
@@ -249,8 +258,15 @@ enum BuildingCategory {
 @export var auto_attacks: bool = false
 @export var attack_range: float = 0.0
 @export var weapon_class: int = -1  # WeaponClass enum from game_enums
+@export var defense_weapon: String = ""  # VietnamWeaponData ID for auto-defense
+@export var defense_type: int = 0  # DefensiveStructure.DefenseType enum
+@export var requires_garrison_to_fire: bool = false  # If true, needs infantry to operate
 @export var is_flammable: bool = false
 @export var is_explosive: bool = false
+
+## HQ Building (PRD Phase 4 - Firebase Influence)
+@export var is_hq_building: bool = false  ## If true, activates firebase influence radius
+@export var influence_radius: float = 150.0  ## Influence radius when this HQ is active (per PRD)
 
 ## Placement Properties
 # TODO: Implement CoH-style drag-and-paint linear placement system for sandbags/wire
@@ -312,7 +328,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 
 		BuildingType.BUNKER:
 			data.display_name = "Bunker"
-			data.description = "Hardened fighting position"
+			data.description = "Hardened fighting position - garrison for defensive fire"
 			data.category = BuildingCategory.FIREBASE_PERIMETER
 			data.supply_cost = 40
 			data.stage_work = [40.0, 60.0, 40.0]
@@ -322,6 +338,11 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.footprint_size = Vector2(4, 4)
 			data.height = 2.5
 			data.cover_value = 0.8
+			data.auto_attacks = true
+			data.attack_range = 300.0
+			data.defense_weapon = "m16"  # Garrison fires rifles
+			data.defense_type = 1  # BUNKER
+			data.requires_garrison_to_fire = true  # Needs infantry
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
 		BuildingType.SANDBAG_BUNKER:
@@ -354,7 +375,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 
 		BuildingType.MACHINE_GUN_NEST:
 			data.display_name = "MG Nest"
-			data.description = "M60 emplacement with 360-degree coverage"
+			data.description = "M60 emplacement with 360-degree coverage - auto-engages enemies"
 			data.category = BuildingCategory.FIREBASE_PERIMETER
 			data.supply_cost = 30
 			data.stage_work = [30.0, 40.0, 30.0]
@@ -365,11 +386,14 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.height = 1.0
 			data.auto_attacks = true
 			data.attack_range = 500.0
+			data.defense_weapon = "m60"  # M60 machine gun
+			data.defense_type = 0  # MG_NEST
+			data.requires_garrison_to_fire = false  # Operates standalone
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
 		BuildingType.MORTAR_PIT:
 			data.display_name = "Mortar Pit"
-			data.description = "81mm mortar position"
+			data.description = "81mm mortar position - indirect fire support, auto-engages enemies"
 			data.category = BuildingCategory.FIREBASE_PERIMETER
 			data.supply_cost = 35
 			data.stage_work = [30.0, 50.0, 30.0]
@@ -379,6 +403,9 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.height = 1.0
 			data.auto_attacks = true
 			data.attack_range = 3500.0
+			data.defense_weapon = "m29_mortar"  # 81mm mortar
+			data.defense_type = 2  # MORTAR_PIT
+			data.requires_garrison_to_fire = true  # Needs crew to operate
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
 
 		BuildingType.WIRE_OBSTACLE:
@@ -543,7 +570,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 
 		BuildingType.TOC:
 			data.display_name = "TOC"
-			data.description = "Tactical Operations Center - firebase headquarters"
+			data.description = "Tactical Operations Center - firebase headquarters. Activates firebase influence radius."
 			data.category = BuildingCategory.FIREBASE_SUPPORT
 			data.supply_cost = 80
 			data.stage_work = [60.0, 80.0, 60.0]
@@ -554,6 +581,8 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.footprint_size = Vector2(6, 4)
 			data.height = 2.5
 			data.construction_slots = 2
+			data.is_hq_building = true  # PRD Phase 4: Activates firebase
+			data.influence_radius = 150.0  # Per PRD: 150m influence radius
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
 		BuildingType.COMMO_BUNKER:
@@ -582,6 +611,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.footprint_size = Vector2(6, 4)
 			data.height = 3.0
 			data.is_flammable = true
+			data.morale_bonus = 10  # QoL: Rest quarters
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.BURNED]
 
 		BuildingType.MESS_HALL:
@@ -594,6 +624,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.footprint_size = Vector2(12, 8)
 			data.height = 4.0
 			data.is_flammable = true
+			data.morale_bonus = 15  # QoL: Hot food
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.BURNED]
 
 		BuildingType.LATRINE:
@@ -605,6 +636,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.health = 30.0
 			data.footprint_size = Vector2(2, 1.5)
 			data.height = 2.5
+			data.morale_bonus = 5  # QoL: Basic sanitation
 			data.is_flammable = true
 			data.provides_cover = false
 			data.destruction_states = [DestructionState.INTACT, DestructionState.BURNED]
@@ -1866,6 +1898,24 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.provides_cover = false
 			data.destruction_states = [DestructionState.INTACT]
 
+		# =====================================================================
+		# FIREBASE LOGISTICS
+		# =====================================================================
+		BuildingType.SUPPLY_DEPOT:
+			data.display_name = "Supply Depot"
+			data.description = "Main supply storage hub - stores and distributes supplies to nearby units"
+			data.category = BuildingCategory.FIREBASE_SUPPORT
+			data.supply_cost = 100
+			data.stage_work = [50.0, 80.0, 50.0]  # ~180 work units total
+			data.health = 400.0
+			data.armor = 5.0
+			data.footprint_size = Vector2(20, 15)
+			data.height = 4.0
+			data.requires_firebase_level = 0  # Can build at patrol base level
+			data.construction_slots = 2
+			data.is_flammable = true
+			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.BURNED, DestructionState.DESTROYED]
+
 	return data
 
 
@@ -1922,6 +1972,7 @@ static func get_buildings_by_category(category: BuildingCategory) -> Array[Build
 				BuildingType.MEDICAL_STATION,
 				BuildingType.TOC,
 				BuildingType.COMMO_BUNKER,
+				BuildingType.SUPPLY_DEPOT,
 			]
 		BuildingCategory.FIREBASE_LIVING:
 			buildings = [

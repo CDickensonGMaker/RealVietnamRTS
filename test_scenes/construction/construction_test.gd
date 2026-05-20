@@ -1,6 +1,9 @@
 extends Node3D
 ## Construction Test Scene
 ##
+## MIGRATED (2026-05-20): Now uses JobSystem + WorkerController pattern.
+## Pattern aligned with clearing_test.gd reference implementation.
+##
 ## Tests the full base-building logistics loop without combat pressure:
 ## - Engineer squads clear vegetation
 ## - Bulldozers flatten terrain via EngineeringSystem
@@ -26,11 +29,8 @@ const SquadData = preload("res://battle_system/data/squad_data.gd")
 
 # These exist in the user's existing codebase; we reference them via preload
 const Firebase = preload("res://firebase_system/firebase.gd")
-const BuilderAI = preload("res://firebase_system/builder_ai.gd")
-
-# New job system classes
-const JobTypes = preload("res://firebase_system/jobs/job_types.gd")
-const JobNode = preload("res://firebase_system/jobs/job_node.gd")
+# Job system classes (migrated from old BuilderAI)
+const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
 const PaintableCommand = preload("res://battle_system/ui/paintable_command.gd")
 const PaintedAreaPreview = preload("res://battle_system/ui/painted_area_preview.gd")
 const RoadDecalRenderer = preload("res://firebase_system/road_decal_renderer.gd")
@@ -46,7 +46,7 @@ var BUILDING_SCENES: Dictionary = {
 }
 
 var hud: Label
-var builder_ai: BuilderAI = null
+# NOTE: builder_ai removed - see JobSystem + WorkerController
 var engineers: Array[Node3D] = []
 var bulldozers: Array[Node3D] = []
 var current_firebase: Node3D = null
@@ -174,16 +174,9 @@ func _ready() -> void:
 	bulldozer.global_position = dozer_pos
 	bulldozers.append(bulldozer)
 
-	# BuilderAI orchestrates clearing -> flattening -> construction
-	builder_ai = BuilderAI.new()
-	builder_ai.name = "BuilderAI"
-	add_child(builder_ai)
-
-	# Register spawned units with BuilderAI
-	for engineer_unit in engineers:
-		builder_ai.register_engineer(engineer_unit)
-	for dozer_unit in bulldozers:
-		builder_ai.register_bulldozer(dozer_unit)
+	# NOTE: BuilderAI has been replaced by JobSystem + WorkerController
+	# Jobs are created via JobSystem autoload, workers find jobs automatically
+	print("[ConstructionTest] Workers will auto-find jobs via WorkerController")
 
 	# NOTE: Using BattleHUD autoload for main UI (selection card + command panel)
 	# Construction-specific mode indicator is shown in the HUD label above
@@ -215,10 +208,19 @@ func _ready() -> void:
 	# Verify building scenes exist, create fallbacks for missing ones
 	_verify_building_scenes()
 
+	# Connect to JobSystem for status updates (aligned with clearing_test.gd pattern)
+	var job_system := get_node_or_null("/root/JobSystem")
+	if job_system:
+		if job_system.has_signal("job_created"):
+			job_system.job_created.connect(_on_job_created)
+		if job_system.has_signal("job_completed"):
+			job_system.job_completed.connect(_on_job_completed)
+		print("[ConstructionTest] Connected to JobSystem")
+
 	print("[ConstructionTest] CONSTRUCTION LOOP TEST")
 	print("[ConstructionTest] B = Open build menu, 1-4 = Quick commands")
 	print("[ConstructionTest] Shift+E = Spawn engineer, Shift+B = Spawn bulldozer")
-	print("[ConstructionTest] Jobs auto-chain: Build on jungle creates Clear → Flatten → Build")
+	print("[ConstructionTest] Jobs auto-chain: Build on jungle creates Clear -> Flatten -> Build")
 
 
 func _setup_camera_position() -> void:
@@ -335,10 +337,9 @@ func _on_command_button_pressed(mode: CommandMode, building_key: String) -> void
 	print("[ConstructionTest] %s" % status_text)
 
 
-func _on_auto_build_toggled(enabled: bool) -> void:
-	if builder_ai:
-		builder_ai.auto_mode_enabled = enabled
-		print("[ConstructionTest] Auto-build: %s" % ("ENABLED" if enabled else "disabled"))
+func _on_auto_build_toggled(_enabled: bool) -> void:
+	# NOTE: Auto-build toggling now handled via WorkerController
+	pass
 
 
 func _cancel_command() -> void:
@@ -430,7 +431,7 @@ func _on_build_menu_building_selected(building_key: String, placement_mode: int)
 			current_command = CommandMode.PLACE_BUILDING
 			if paint_controller:
 				paint_controller.activate(PaintableCommand.InputMode.LINE,
-					JobTypes.JobType.BUILD_STRUCTURE)
+					UnifiedJob.Type.BUILD_STRUCTURE)
 			print("[ConstructionTest] Line mode: drag to draw %s wall" % building_key)
 
 		BuildMenuPopup.PlacementMode.PAINTABLE_SPACED:
@@ -438,9 +439,18 @@ func _on_build_menu_building_selected(building_key: String, placement_mode: int)
 			current_command = CommandMode.PLACE_BUILDING
 			if paint_controller:
 				paint_controller.activate(PaintableCommand.InputMode.RECT,
-					JobTypes.JobType.BUILD_STRUCTURE)
+					UnifiedJob.Type.BUILD_STRUCTURE)
 			print("[ConstructionTest] Spaced mode (%.1f units): drag to place %s" % [
 				current_building_spacing, building_key])
+
+		BuildMenuPopup.PlacementMode.PAINTABLE_LINE_JITTERED:
+			# Use LINE mode with jittered placement (foxholes, defensive positions)
+			current_command = CommandMode.PLACE_BUILDING
+			if paint_controller:
+				paint_controller.activate(PaintableCommand.InputMode.LINE,
+					UnifiedJob.Type.BUILD_STRUCTURE)
+			print("[ConstructionTest] Jittered line mode: drag to place %s (%.1fm spacing)" % [
+				building_key, current_building_spacing])
 
 
 func _on_build_menu_closed() -> void:
@@ -476,14 +486,8 @@ func _execute_clear_terrain(center: Vector3, size: Vector2) -> void:
 				can_clear = true
 
 		if can_clear:
-			# Assign to clear area via BuilderAI or direct move
-			if builder_ai:
-				var unit_type: int = 0  # ENGINEER
-				if unit.get("data") and unit.get("data").is_vehicle:
-					unit_type = 1  # BULLDOZER
-				builder_ai._assign_clearing_task(unit, center, unit_type)
-				assigned_count += 1
-			elif unit.has_method("move_to"):
+			# Move unit to clear area - WorkerController will handle job assignment
+			if unit.has_method("move_to"):
 				unit.move_to(center)
 				assigned_count += 1
 
@@ -720,8 +724,8 @@ func _create_ghost_preview(building_key: String) -> void:
 	ghost_material.cull_mode = BaseMaterial3D.CULL_DISABLED  # See both sides
 	ghost_preview.material_override = ghost_material
 
-	# Position slightly above ground (half height)
-	ghost_preview.position.y = building_height * 0.5
+	# Store y offset as metadata (NOT in position.y which gets overwritten by global_position)
+	ghost_preview.set_meta("y_offset", building_height * 0.5)
 
 	add_child(ghost_preview)
 	print("[ConstructionTest] Ghost preview created for: %s (%.1fx%.1f, h=%.1f)" % [
@@ -923,7 +927,11 @@ func _input(event: InputEvent) -> void:
 						if build_menu.visible:
 							build_menu.close_menu()
 						else:
-							build_menu.open_menu(1000)  # TODO: Get actual supply
+							var supply_amount: int = 1000
+							var sm = get_node_or_null("/root/SupplyManager")
+							if sm and sm.has_method("get_global_supply"):
+								supply_amount = int(sm.get_global_supply())
+							build_menu.open_menu(supply_amount)
 			KEY_E:
 				if shift_held:
 					_spawn_engineer()
@@ -954,10 +962,8 @@ func _input(event: InputEvent) -> void:
 				if current_command == CommandMode.NONE:
 					_on_command_button_pressed(CommandMode.PLACE_BUILDING, "gate_entrance")
 			KEY_TAB:
-				# Toggle auto-build
-				if builder_ai:
-					var new_state: bool = not builder_ai.auto_mode_enabled
-					_on_auto_build_toggled(new_state)
+				# Toggle auto-build (now via WorkerController)
+				print("[ConstructionTest] Auto-build toggle not implemented yet")
 
 
 func _handle_left_click_down(screen_pos: Vector2) -> void:
@@ -1075,8 +1081,7 @@ func _spawn_bulldozer() -> void:
 		spawn_pos.y = terrain.get_height_at(spawn_pos) + 0.1
 	b.global_position = spawn_pos
 	bulldozers.append(b)
-	if builder_ai:
-		builder_ai.register_bulldozer(b)
+	# Workers auto-register with JobSystem via WorkerController
 	print("[ConstructionTest] Spawned bulldozer at %s" % spawn_pos)
 
 
@@ -1090,8 +1095,7 @@ func _spawn_engineer() -> void:
 		spawn_pos.y = terrain.get_height_at(spawn_pos) + 0.1
 	e.global_position = spawn_pos
 	engineers.append(e)
-	if builder_ai:
-		builder_ai.register_engineer(e)
+	# Workers auto-register with JobSystem via WorkerController
 	print("[ConstructionTest] Spawned engineer squad at %s" % spawn_pos)
 
 
@@ -1134,9 +1138,9 @@ func _process(_delta: float) -> void:
 
 	# Update ghost preview position, rotation, and validity color
 	if ghost_preview and target != Vector3.INF:
-		# Position ghost at cursor (y offset handled by ghost's local position)
-		ghost_preview.global_position = target
-		ghost_preview.global_position.y += ghost_preview.position.y  # Add height offset
+		# Position ghost at cursor with stored y offset
+		var y_offset: float = ghost_preview.get_meta("y_offset", 0.0)
+		ghost_preview.global_position = Vector3(target.x, target.y + y_offset, target.z)
 		ghost_preview.rotation.y = placement_rotation
 
 		# Check placement validity for ghost color
@@ -1156,6 +1160,13 @@ func _process(_delta: float) -> void:
 					is_valid = false
 					break
 
+			# Check supply affordability
+			if is_valid:
+				var sm = get_node_or_null("/root/SupplyManager")
+				if sm and sm.has_method("can_afford"):
+					if not sm.can_afford(current_building_data.supply_cost):
+						is_valid = false
+
 		_update_ghost_color(is_valid)
 
 	# Update area preview during drag
@@ -1168,7 +1179,7 @@ func _process(_delta: float) -> void:
 
 
 func _update_hud() -> void:
-	"""Update HUD including job list"""
+	## Update HUD including job list (aligned with clearing_test.gd pattern)
 	if not hud:
 		return
 
@@ -1187,55 +1198,123 @@ func _update_hud() -> void:
 		CommandMode.PLACE_BUILDING:
 			mode_text = "PLACE: %s" % selected_building
 
-	# Get active jobs from JobManager
-	var job_mgr := get_node_or_null("/root/JobManager")
+	# Get active jobs from JobSystem
+	var job_system := get_node_or_null("/root/JobSystem")
 	var job_count: int = 0
-	var job_lines: PackedStringArray = []
-
-	if job_mgr:
-		job_count = job_mgr.get_active_job_count()
-		var jobs: Array = job_mgr.active_jobs
-		for i in range(mini(jobs.size(), 5)):  # Show max 5 jobs
-			var job: JobNode = jobs[i]
-			if is_instance_valid(job) and job.completion_state != JobTypes.CompletionState.COMPLETE:
-				job_lines.append("  #%d: %s - %s" % [
-					job.job_id,
-					JobTypes.get_job_name(job.job_type),
-					job.get_status_text()
-				])
+	var pending_count: int = 0
 
 	var lines: PackedStringArray = [
-		"CONSTRUCTION LOOP TEST",
+		"=== CONSTRUCTION LOOP TEST ===",
 		"Engineers: %d   Bulldozers: %d" % [engineers.size(), bulldozers.size()],
 		"Firebase: %s" % ("placed" if current_firebase else "click to place"),
-		"Buildings: %d   Active Jobs: %d" % [placed_buildings.size(), job_count],
-		"",
-		"Mode: %s" % mode_text,
-		"",
-		"CONTROLS:",
-		"  B = Build menu popup",
-		"  1-4 = Quick commands",
-		"  Shift+E/B = Spawn units",
-		"",
-		"CLEARING RATES:",
-		"  Engineer: 3.5 sec/tree",
-		"  Bulldozer: 7.0 sec/tree",
+		"Buildings: %d" % placed_buildings.size(),
 	]
 
-	if job_lines.size() > 0:
+	# Show job counts and queue details (aligned with clearing_test.gd)
+	if job_system:
+		var counts: Dictionary = job_system.get_job_counts()
+		job_count = counts.ready + counts.in_progress
+		pending_count = counts.pending
 		lines.append("")
-		lines.append("ACTIVE JOBS:")
-		lines.append_array(job_lines)
+		lines.append("Jobs: %d pending, %d ready, %d in-progress" % [
+			counts.pending, counts.ready, counts.in_progress
+		])
+
+		# Show job queue details (up to 5 jobs)
+		var all_jobs: Array = []
+		if job_system.has_method("get") and job_system.get("_ready_jobs"):
+			all_jobs.append_array(job_system._ready_jobs)
+		if job_system.has_method("get") and job_system.get("_in_progress_jobs"):
+			all_jobs.append_array(job_system._in_progress_jobs)
+
+		if all_jobs.size() > 0:
+			lines.append("Active Jobs:")
+			var shown: int = 0
+			for job in all_jobs:
+				if not is_instance_valid(job):
+					continue
+				if shown >= 5:
+					lines.append("  ... +%d more" % (all_jobs.size() - 5))
+					break
+				var type_name: String = UnifiedJob.get_type_name(job.job_type)
+				var progress: float = job.work_done / job.work_required if job.work_required > 0 else 0.0
+				var workers_count: int = job.assigned_workers.size()
+				var state: String = "RDY" if job.state == UnifiedJob.State.READY else "WRK"
+				lines.append("  [%s] %s: %.0f%% (%d workers)" % [
+					state, type_name, progress * 100, workers_count
+				])
+				shown += 1
+
+		# Show pending jobs count
+		if pending_count > 0:
+			lines.append("Pending: %d (waiting for prerequisites)" % pending_count)
+
+	lines.append("")
+	lines.append("Mode: %s" % mode_text)
+	lines.append("")
+
+	# Worker status section (aligned with clearing_test.gd)
+	lines.append("Worker Status:")
+	for eng in engineers:
+		if is_instance_valid(eng):
+			var status: String = _get_worker_status(eng)
+			lines.append("  %s: %s" % [eng.data.display_name if eng.data else eng.name, status])
+	for dozer in bulldozers:
+		if is_instance_valid(dozer):
+			var status: String = _get_worker_status(dozer)
+			lines.append("  %s: %s" % [dozer.data.display_name if dozer.data else dozer.name, status])
+
+	lines.append("")
+	lines.append("CONTROLS:")
+	lines.append("  B = Build menu | 1-4 = Quick commands")
+	lines.append("  Shift+E/B = Spawn units | R = Rotate")
+	lines.append("  Right-click = Cancel mode")
 
 	hud.text = "\n".join(lines)
+
+
+## Get worker status string (aligned with clearing_test.gd pattern)
+func _get_worker_status(worker: Node3D) -> String:
+	if not is_instance_valid(worker):
+		return "INVALID"
+
+	# Check WorkerController for status
+	if worker.has_method("get_worker_controller"):
+		var wc: Node = worker.get_worker_controller()
+		if wc and wc.has_method("get_status_string"):
+			return wc.get_status_string()
+
+	# Fallback: check for common state properties
+	if "current_job" in worker and worker.current_job:
+		return "WORKING"
+	if "is_moving" in worker and worker.is_moving:
+		return "MOVING"
+	return "IDLE"
 
 
 ## =============================================================================
 ## JOB SYSTEM INTEGRATION
 ## =============================================================================
 
+## Handle job creation notification (aligned with clearing_test.gd)
+func _on_job_created(job) -> void:
+	print("[ConstructionTest] JOB CREATED: #%d %s at %v" % [
+		job.job_id, UnifiedJob.get_type_name(job.job_type), job.center
+	])
+
+
+## Handle job completion notification (aligned with clearing_test.gd)
+func _on_job_completed(job) -> void:
+	print("[ConstructionTest] JOB COMPLETED: #%d %s" % [
+		job.job_id, UnifiedJob.get_type_name(job.job_type)
+	])
+	# Building jobs trigger actual building placement via _on_build_job_completed
+	if job.job_type == UnifiedJob.Type.BUILD_STRUCTURE:
+		_on_build_job_completed(job)
+
+
 func _verify_building_scenes() -> void:
-	"""Check building scenes exist, create fallbacks for missing"""
+	## Check building scenes exist, create fallbacks for missing
 	for key in BUILDING_SCENES:
 		var path: String = BUILDING_SCENES[key]
 		if not ResourceLoader.exists(path):
@@ -1246,35 +1325,24 @@ func _verify_building_scenes() -> void:
 
 func _on_area_painted(min_corner: Vector3, max_corner: Vector3) -> void:
 	"""Handle area paint completion - create job"""
-	var job_mgr := get_node_or_null("/root/JobManager")
-	if not job_mgr:
-		push_error("[ConstructionTest] JobManager not found")
+	var job_system := get_node_or_null("/root/JobSystem")
+	if not job_system:
+		push_error("[ConstructionTest] JobSystem not found")
 		return
 
-	var job: JobNode = null
+	var center: Vector3 = (min_corner + max_corner) * 0.5
+	var size: Vector2 = Vector2(absf(max_corner.x - min_corner.x), absf(max_corner.z - min_corner.z))
+	var job: UnifiedJob = null
 
 	match current_command:
 		CommandMode.CLEAR_TERRAIN:
-			job = job_mgr.create_area_job(
-				JobTypes.JobType.CLEAR_TERRAIN,
-				min_corner, max_corner,
-				false  # Don't auto-resolve deps for explicit clear
-			)
-
+			job = job_system.create_job(UnifiedJob.Type.CLEAR_TERRAIN, center, size)
 		CommandMode.FLATTEN_AREA:
-			job = job_mgr.create_area_job(
-				JobTypes.JobType.FLATTEN_AREA,
-				min_corner, max_corner,
-				true  # Auto-resolve: may need clearing first
-			)
+			job = job_system.create_job(UnifiedJob.Type.FLATTEN_AREA, center, size)
 
 	if job:
-		# Register with construction manager for worker assignment
-		if ConstructionManager:
-			ConstructionManager.register_job(job)
-
 		print("[ConstructionTest] Created %s job #%d" % [
-			JobTypes.get_job_name(job.job_type), job.job_id
+			UnifiedJob.get_type_name(job.job_type), job.job_id
 		])
 
 	# Stay in same mode for quick successive operations
@@ -1286,15 +1354,21 @@ func _on_polyline_committed(points: PackedVector3Array) -> void:
 	if points.size() < 2:
 		return
 
-	var job_mgr := get_node_or_null("/root/JobManager")
-	if not job_mgr:
+	var job_system := get_node_or_null("/root/JobSystem")
+	if not job_system:
 		return
 
-	var job: JobNode = job_mgr.create_road_job(points, true)
+	# Calculate road center and approximate size
+	var center: Vector3 = Vector3.ZERO
+	for p in points:
+		center += p
+	center /= points.size()
+	var size := Vector2(10.0, 10.0)  # Approximate road area
+
+	var job: UnifiedJob = job_system.create_job(UnifiedJob.Type.BUILD_ROAD, center, size)
 
 	if job:
-		if ConstructionManager:
-			ConstructionManager.register_job(job)
+		job.metadata["path_points"] = points
 
 		# Create road visual connected to job
 		var road_visual := RoadDecalRenderer.create_for_job(job)
@@ -1340,6 +1414,8 @@ func _on_line_painted(start_pos: Vector3, end_pos: Vector3) -> void:
 	var segment_size: float = 2.0  # Default sandbag segment size
 	if current_placement_mode == BuildMenuPopup.PlacementMode.PAINTABLE_SPACED:
 		segment_size = current_building_spacing
+	elif current_placement_mode == BuildMenuPopup.PlacementMode.PAINTABLE_LINE_JITTERED:
+		segment_size = current_building_spacing if current_building_spacing > 0 else 4.0
 	else:
 		# For seamless walls, use building footprint size
 		segment_size = 2.0  # Sandbag wall segment
@@ -1361,6 +1437,19 @@ func _on_line_painted(start_pos: Vector3, end_pos: Vector3) -> void:
 		# Calculate rotation to face along the line
 		var rot: float = atan2(direction.x, direction.z)
 
+		# Apply jitter for PAINTABLE_LINE_JITTERED mode (foxholes, defensive positions)
+		if current_placement_mode == BuildMenuPopup.PlacementMode.PAINTABLE_LINE_JITTERED:
+			# Jitter perpendicular to line direction
+			var perp := Vector3(-direction.z, 0, direction.x)
+			var lateral_jitter := randf_range(-1.5, 1.5)  # +/- 1.5m off the line
+			var along_jitter := randf_range(-0.4, 0.4)    # +/- 0.4m along line
+			pos += perp * lateral_jitter + direction * along_jitter
+			# Randomize rotation slightly - foxholes don't all face the same way
+			rot += randf_range(-0.4, 0.4)
+			# Re-sample terrain height at jittered position
+			if terrain and terrain.has_method("get_height_at"):
+				pos.y = terrain.get_height_at(pos)
+
 		# Create build job for this segment
 		_create_wall_segment_job(pos, rot, selected_building)
 		segments_placed += 1
@@ -1374,23 +1463,29 @@ func _on_line_painted(start_pos: Vector3, end_pos: Vector3) -> void:
 
 func _create_wall_segment_job(position: Vector3, rotation: float, building_key: String) -> void:
 	"""Create a build job for a single wall segment"""
-	var job_mgr := get_node_or_null("/root/JobManager")
-	if not job_mgr:
+	# Check and consume supply before creating job
+	if current_building_data:
+		var sm = get_node_or_null("/root/SupplyManager")
+		if sm and sm.has_method("consume_global_supply"):
+			if not sm.consume_global_supply(current_building_data.supply_cost):
+				print("[ConstructionTest] Cannot afford %s segment" % building_key)
+				return
+
+	var job_system := get_node_or_null("/root/JobSystem")
+	if not job_system:
 		return
 
 	# Create build job at position
-	var job: JobNode = job_mgr.create_build_job(
+	var job: UnifiedJob = job_system.create_job(
+		UnifiedJob.Type.BUILD_STRUCTURE,
 		position,
-		building_key,
-		true  # Auto-resolve dependencies (clear/flatten if needed)
+		Vector2(2.0, 2.0)  # Wall segment size
 	)
 
 	if job:
-		# Store rotation in job metadata
-		job.set_meta("rotation", rotation)
-
-		if ConstructionManager:
-			ConstructionManager.register_job(job)
+		# Store building info in job metadata
+		job.metadata["rotation"] = rotation
+		job.metadata["building_key"] = building_key
 
 
 func _on_paint_cancelled() -> void:
@@ -1405,7 +1500,7 @@ func _on_paint_updated(current_pos: Vector3) -> void:
 	if not area_preview:
 		return
 
-	var job_type: JobTypes.JobType = _command_to_job_type(current_command)
+	var job_type: UnifiedJob.Type = _command_to_job_type(current_command)
 
 	match current_command:
 		CommandMode.CLEAR_TERRAIN, CommandMode.FLATTEN_AREA:
@@ -1439,33 +1534,37 @@ func _on_paint_updated(current_pos: Vector3) -> void:
 				area_preview.show_single(current_pos, job_type, true)
 
 
-func _command_to_job_type(cmd: CommandMode) -> JobTypes.JobType:
+func _command_to_job_type(cmd: CommandMode) -> UnifiedJob.Type:
 	"""Convert command mode to job type"""
 	match cmd:
 		CommandMode.CLEAR_TERRAIN:
-			return JobTypes.JobType.CLEAR_TERRAIN
+			return UnifiedJob.Type.CLEAR_TERRAIN
 		CommandMode.FLATTEN_AREA:
-			return JobTypes.JobType.FLATTEN_AREA
+			return UnifiedJob.Type.FLATTEN_AREA
 		CommandMode.BUILD_ROAD:
-			return JobTypes.JobType.BUILD_ROAD
+			return UnifiedJob.Type.BUILD_ROAD
 		CommandMode.FILL_CRATER:
-			return JobTypes.JobType.FILL_CRATER
+			return UnifiedJob.Type.FILL_CRATER
 		CommandMode.PLACE_BUILDING:
-			return JobTypes.JobType.BUILD_STRUCTURE
+			return UnifiedJob.Type.BUILD_STRUCTURE
 		_:
-			return JobTypes.JobType.CLEAR_TERRAIN
+			return UnifiedJob.Type.CLEAR_TERRAIN
 
 
 func _create_fill_job(position: Vector3) -> void:
 	"""Create a fill crater job"""
-	var job_mgr := get_node_or_null("/root/JobManager")
-	if not job_mgr:
+	var job_system := get_node_or_null("/root/JobSystem")
+	if not job_system:
 		return
 
-	var job: JobNode = job_mgr.create_fill_job(position)
+	var job: UnifiedJob = job_system.create_job(
+		UnifiedJob.Type.FILL_CRATER,
+		position,
+		Vector2(5.0, 5.0)  # Crater fill area
+	)
 
-	if job and ConstructionManager:
-		ConstructionManager.register_job(job)
+	if job:
+		print("[ConstructionTest] Created fill job #%d at %s" % [job.job_id, position])
 
 	print("[ConstructionTest] Created fill crater job at %s" % position)
 	_cancel_command()
@@ -1476,8 +1575,17 @@ func _create_build_job(position: Vector3) -> void:
 	if selected_building.is_empty():
 		return
 
-	var job_mgr := get_node_or_null("/root/JobManager")
-	if not job_mgr:
+	# Check and consume supply before creating job
+	if current_building_data:
+		var sm = get_node_or_null("/root/SupplyManager")
+		if sm and sm.has_method("consume_global_supply"):
+			if not sm.consume_global_supply(current_building_data.supply_cost):
+				print("[ConstructionTest] Cannot afford %s (cost: %d)" % [
+					selected_building, current_building_data.supply_cost])
+				return
+
+	var job_system := get_node_or_null("/root/JobSystem")
+	if not job_system:
 		return
 
 	# Get footprint size from building data or use default
@@ -1487,46 +1595,29 @@ func _create_build_job(position: Vector3) -> void:
 	elif placement_preview and placement_preview.has_meta("footprint_size"):
 		footprint_size = placement_preview.get_meta("footprint_size")
 
-	# Create build job with auto-prerequisites (Clear → Flatten → Build)
-	var job: JobNode = job_mgr.create_build_job(
+	# Create build job
+	var job: UnifiedJob = job_system.create_job(
+		UnifiedJob.Type.BUILD_STRUCTURE,
 		position,
-		0,  # building_type placeholder
-		placement_rotation,
-		footprint_size,
-		true  # Auto-resolve dependencies
+		footprint_size
 	)
 
 	if job:
 		# Store building info in job metadata
 		job.metadata["building_key"] = selected_building
 		job.metadata["rotation"] = placement_rotation
+		job.metadata["footprint_size"] = footprint_size
 
-		# Connect to completion to actually place the building
-		job.job_completed.connect(_on_build_job_completed.bind(job))
-
-		if ConstructionManager:
-			ConstructionManager.register_job(job)
-
-		# Also register prerequisites
-		for prereq in job.prerequisites:
-			if is_instance_valid(prereq) and ConstructionManager:
-				ConstructionManager.register_job(prereq)
-				for nested in prereq.prerequisites:
-					if is_instance_valid(nested):
-						ConstructionManager.register_job(nested)
-
-		print("[ConstructionTest] Created build job #%d with %d prerequisites" % [
-			job.job_id, job.prerequisites.size()
-		])
+		print("[ConstructionTest] Created build job #%d" % job.job_id)
 
 	_cancel_command()
 
 
-func _on_build_job_completed(job: JobNode) -> void:
+func _on_build_job_completed(job: UnifiedJob) -> void:
 	"""Handle build job completion - actually place the building"""
 	var building_key: String = job.metadata.get("building_key", "")
 	var rotation: float = job.metadata.get("rotation", 0.0)
-	var position: Vector3 = job.center_position
+	var position: Vector3 = job.center
 
 	# Get terrain height
 	var terrain := get_node_or_null("/root/TerrainIntegration")

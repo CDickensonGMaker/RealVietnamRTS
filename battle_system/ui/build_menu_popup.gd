@@ -13,9 +13,10 @@ signal menu_closed()
 
 ## Placement modes for different building types
 enum PlacementMode {
-	SINGLE,           # One click, one building
-	PAINTABLE,        # Continuous drag placement (seamless)
-	PAINTABLE_SPACED  # Continuous drag with spacing (e.g., tank traps)
+	SINGLE,                  # One click, one building
+	PAINTABLE,               # Continuous drag placement (seamless)
+	PAINTABLE_SPACED,        # Continuous drag with spacing (e.g., tank traps)
+	PAINTABLE_LINE_JITTERED  # Drag line with jittered spacing (foxholes)
 }
 
 ## Building entry for the menu
@@ -78,9 +79,9 @@ func _setup_buildings() -> void:
 	_add_building("wire_obstacle", "Wire Obstacle", 10, PlacementMode.PAINTABLE_SPACED,
 		"", BuildingData.BuildingType.WIRE_OBSTACLE, 2.0)
 
-	# Tank Traps - paintable with 1.6 unit spacing
-	_add_building("tank_trap", "Tank Trap", 8, PlacementMode.PAINTABLE_SPACED,
-		"", -1, 1.6)
+	# Tank Traps - jittered line placement
+	_add_building("tank_trap", "Tank Trap", 8, PlacementMode.PAINTABLE_LINE_JITTERED,
+		"", -1, 2.5)  # 2.5m spacing with jitter
 
 	# Bunker - single placement
 	_add_building("bunker", "Bunker", 40, PlacementMode.SINGLE,
@@ -98,9 +99,9 @@ func _setup_buildings() -> void:
 	_add_building("watchtower", "Watchtower", 25, PlacementMode.SINGLE,
 		"", BuildingData.BuildingType.WATCHTOWER)
 
-	# Foxhole - single placement (quick cover)
-	_add_building("foxhole", "Foxhole", 15, PlacementMode.SINGLE,
-		"", -1)
+	# Foxhole - jittered line placement (CoH-style defensive line)
+	_add_building("foxhole", "Foxhole", 15, PlacementMode.PAINTABLE_LINE_JITTERED,
+		"", -1, 4.0)  # 4m base spacing
 
 	# Helipad - single placement
 	_add_building("helipad", "Helipad", 50, PlacementMode.SINGLE,

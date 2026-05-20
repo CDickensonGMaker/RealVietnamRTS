@@ -8,6 +8,10 @@ signal firebase_level_changed(firebase: Firebase, new_level: int)
 signal building_constructed(firebase: Firebase, building: Node3D)
 signal firebase_attacked(firebase: Firebase, attacker: Node3D)
 signal firebase_destroyed(firebase: Firebase)
+signal firebase_activated(firebase: Firebase)  ## Emitted when HQ building completes
+signal firebase_deactivated(firebase: Firebase)  ## Emitted when HQ building destroyed
+signal supply_low  ## Emitted when supply drops below 20%
+signal supply_depleted  ## Emitted when supply hits zero
 
 enum FirebaseLevel { PATROL_BASE, FIRE_SUPPORT_BASE, MAJOR_FIREBASE }
 
@@ -32,6 +36,11 @@ var perimeter_center: Vector3 = Vector3.ZERO
 ## Resources
 var supply_level: float = 100.0
 var max_supply: float = 500.0
+
+## HQ Building & Activation (PRD Phase 4)
+var _hq_building: Node3D = null  ## Reference to TOC/Command Post
+var _is_active: bool = false  ## Firebase only active when HQ is built
+var influence_radius: float = 150.0  ## Radius for supply/morale effects (per PRD)
 
 ## Stats
 var total_health: float = 500.0
@@ -158,10 +167,14 @@ func _create_firebase_visual() -> void:
 	add_child(perimeter)
 
 
-func _on_construction_complete(_zone: ConstructionZone, building: Node3D) -> void:
+func _on_construction_complete(zone: ConstructionZone, building: Node3D) -> void:
 	"""Handle building completion"""
 	buildings.append(building)
 	building_constructed.emit(self, building)
+
+	# Check if this is an HQ building (TOC) - activates firebase
+	if zone.building_data and zone.building_data.is_hq_building:
+		_activate_with_hq(building, zone.building_data)
 
 	# Check for level upgrade
 	_check_level_upgrade()
@@ -283,6 +296,94 @@ func add_supply(amount: float) -> void:
 	supply_level = minf(supply_level + amount, max_supply)
 
 
+func withdraw_supply(amount: float) -> float:
+	"""Withdraw supply from firebase for transfer/distribution.
+	Returns the actual amount withdrawn (may be less if insufficient supply)."""
+	var actual_amount: float = minf(amount, supply_level)
+
+	if actual_amount <= 0.0:
+		supply_depleted.emit()
+		return 0.0
+
+	supply_level -= actual_amount
+
+	# Emit warning at 20%
+	if supply_level / max_supply < 0.2:
+		supply_low.emit()
+
+	# Emit depleted if now at zero
+	if supply_level <= 0.0:
+		supply_depleted.emit()
+
+	return actual_amount
+
+
+func consume_supply(amount: int) -> bool:
+	"""Consume supply from firebase. Returns false if insufficient."""
+	if supply_level < amount:
+		supply_depleted.emit()
+		return false
+
+	supply_level -= amount
+
+	# Emit warning at 20%
+	if supply_level / max_supply < 0.2:
+		supply_low.emit()
+
+	return true
+
+
+func get_water_tank() -> Node3D:
+	"""Find the water tank building if it exists."""
+	for building in buildings:
+		if building.has_method("is_water_tank") and building.is_water_tank():
+			return building
+	return null
+
+
+func get_water_modifier() -> float:
+	"""Get water modifier for combat effectiveness (0.85 to 1.1)."""
+	var tank := get_water_tank()
+
+	if not tank:
+		return 0.85  # No tank = 15% debuff (dehydrated)
+
+	if tank.has_method("is_working") and not tank.is_working():
+		return 0.85  # Broken tank = 15% debuff
+
+	# Get water level
+	var water_percent: float = 0.5
+	if tank.has_method("get_water_percent"):
+		water_percent = tank.get_water_percent()
+
+	if water_percent > 0.5:
+		return 1.1   # Hydrated = 10% buff
+	elif water_percent > 0.2:
+		return 1.0   # Adequate = baseline
+	else:
+		return 0.9   # Low water = 10% debuff
+
+
+func can_units_fight() -> bool:
+	"""Check if units at this firebase can reload/fight."""
+	# Only supply is a hard stop - water is a modifier
+	return supply_level > 0
+
+
+func get_morale_modifier() -> float:
+	"""Get morale modifier from QoL buildings (0.7 to 1.0)."""
+	var base_morale: int = 50  # Start at 50%
+
+	# Add bonuses from completed QoL buildings
+	for zone in construction_zones:
+		if zone.is_complete() and zone.building_data:
+			base_morale += zone.building_data.morale_bonus
+
+	# Clamp 0-100, convert to modifier (0.7 to 1.0)
+	base_morale = clampi(base_morale, 0, 100)
+	return 0.7 + (float(base_morale) / 333.0)
+
+
 func take_damage(amount: float, source: Node3D = null) -> void:
 	"""Apply damage to firebase"""
 	current_health -= amount
@@ -335,3 +436,70 @@ func get_level_name() -> String:
 		FirebaseLevel.MAJOR_FIREBASE:
 			return "Major Firebase"
 	return "Unknown"
+
+
+# =============================================================================
+# HQ BUILDING & FIREBASE ACTIVATION (PRD Phase 4)
+# =============================================================================
+
+## Check if firebase is active (has completed HQ building)
+func is_active() -> bool:
+	return _is_active and _hq_building != null
+
+
+## Activate firebase with HQ building
+func _activate_with_hq(hq_building: Node3D, building_data: BuildingData) -> void:
+	if _is_active:
+		return  # Already active
+
+	_hq_building = hq_building
+	_is_active = true
+	influence_radius = building_data.influence_radius
+
+	# Connect to HQ destruction
+	if hq_building.has_signal("destroyed"):
+		hq_building.destroyed.connect(_on_hq_destroyed)
+
+	firebase_activated.emit(self)
+	if BattleSignals:
+		BattleSignals.firebase_activated.emit(self)
+	print("[Firebase] %s ACTIVATED - influence radius %.0fm" % [firebase_name, influence_radius])
+
+
+## Handle HQ building destroyed - firebase falls
+func _on_hq_destroyed() -> void:
+	_deactivate()
+	BattleSignals.firebase_under_attack.emit(self, null)
+
+
+## Deactivate firebase (HQ destroyed)
+func _deactivate() -> void:
+	if not _is_active:
+		return
+
+	_is_active = false
+	_hq_building = null
+
+	firebase_deactivated.emit(self)
+	if BattleSignals:
+		BattleSignals.firebase_deactivated.emit(self)
+	print("[Firebase] %s DEACTIVATED - HQ destroyed!" % firebase_name)
+
+
+## Get influence radius (per PRD: 150m when active, 0 when inactive)
+func get_influence_radius() -> float:
+	if _is_active:
+		return influence_radius
+	return 0.0
+
+
+## Check if a world position is within firebase influence radius
+func is_position_in_influence(world_pos: Vector3) -> bool:
+	if not _is_active:
+		return false
+	return global_position.distance_to(world_pos) <= influence_radius
+
+
+## Get the HQ building reference
+func get_hq_building() -> Node3D:
+	return _hq_building

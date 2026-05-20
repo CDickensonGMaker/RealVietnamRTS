@@ -8,6 +8,7 @@ signal supply_requested(destination: Node3D, amount: float)
 signal supply_delivered(destination: Node3D, amount: float)
 signal supply_shortage(location: Node3D)
 signal supply_route_established(origin: Node3D, destination: Node3D)
+signal global_supply_changed(new_amount: float)
 
 ## Supply network
 var supply_points: Array[Node3D] = []  # Firebases, depots, etc.
@@ -44,17 +45,27 @@ class SupplyRoute:
 
 
 func _ready() -> void:
-	# Find existing supply points (firebases)
+	# Add to group so SupplyDepot can find us
+	add_to_group("supply_managers")
+
+	# Find existing supply points (firebases and depots)
 	_discover_supply_points()
 	print("[SupplyManager] Initialized with %d supply points" % supply_points.size())
 
 
 func _discover_supply_points() -> void:
 	"""Find firebases and depots in the scene"""
+	# Find firebases
 	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
 	for fb in firebases:
 		if fb is Node3D and fb not in supply_points:
 			supply_points.append(fb as Node3D)
+
+	# Find supply depots
+	var depots: Array[Node] = get_tree().get_nodes_in_group("supply_depots")
+	for depot in depots:
+		if depot is Node3D and depot not in supply_points:
+			supply_points.append(depot as Node3D)
 
 
 func _process(delta: float) -> void:
@@ -198,7 +209,26 @@ func unregister_supply_point(point: Node3D) -> void:
 
 func add_global_supply(amount: float) -> void:
 	"""Add to global supply pool"""
+	var old_supply := global_supply
 	global_supply = minf(global_supply + amount, max_global_supply)
+	if global_supply != old_supply:
+		global_supply_changed.emit(global_supply)
+
+
+func consume_global_supply(amount: float) -> bool:
+	"""Try to consume from global pool. Returns false if insufficient."""
+	if amount <= 0.0:
+		return true
+	if global_supply < amount:
+		return false
+	global_supply -= amount
+	global_supply_changed.emit(global_supply)
+	return true
+
+
+func can_afford(amount: float) -> bool:
+	"""Check if global pool has enough supply."""
+	return global_supply >= amount
 
 
 func get_global_supply() -> float:
@@ -207,6 +237,10 @@ func get_global_supply() -> float:
 
 func get_supply_at(point: Node3D) -> float:
 	"""Get supply level at a point"""
+	# Check for SupplyDepot first (uses current_storage)
+	if point.has_method("get_available_supply"):
+		return point.get_available_supply()
+	# Fallback to Firebase supply_level
 	if point.has_method("get") and point.get("supply_level") != null:
 		return point.supply_level
 	return 0.0
@@ -218,3 +252,40 @@ func get_route_count() -> int:
 
 func get_supply_point_count() -> int:
 	return supply_points.size()
+
+
+func get_all_supply_depots() -> Array[Node3D]:
+	"""Get all registered supply depots."""
+	var depots: Array[Node3D] = []
+	var depot_nodes: Array[Node] = get_tree().get_nodes_in_group("supply_depots")
+	for node in depot_nodes:
+		if node is Node3D:
+			depots.append(node as Node3D)
+	return depots
+
+
+func find_nearest_depot(position: Vector3) -> Node3D:
+	"""Find the nearest supply depot to a position."""
+	var depots: Array[Node3D] = get_all_supply_depots()
+	var nearest: Node3D = null
+	var nearest_dist: float = INF
+
+	for depot in depots:
+		var dist: float = position.distance_to(depot.global_position)
+		if dist < nearest_dist:
+			nearest_dist = dist
+			nearest = depot
+
+	return nearest
+
+
+func find_depot_with_supply(min_supply: float = 100.0) -> Node3D:
+	"""Find a supply depot with at least the specified supply amount."""
+	var depots: Array[Node3D] = get_all_supply_depots()
+
+	for depot in depots:
+		var available: float = get_supply_at(depot)
+		if available >= min_supply:
+			return depot
+
+	return null

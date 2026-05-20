@@ -2,16 +2,14 @@ extends Node
 ## ConstructionManager - Autoload singleton
 ## Access via: ConstructionManager.build_immediately(firebase, type)
 ##
-## ROLE CLARIFICATION (2026-05-16):
-## - ConstructionManager handles LEGACY ConstructionZone system (firebase building slots)
-## - BuilderAI handles NEW JobNode system (paintable clearing/building jobs)
-## - Worker assignment is EXCLUSIVELY handled by BuilderAI to prevent conflicts
-## - Job work processing is EXCLUSIVELY handled by BuilderAI._process_job_work()
+## ROLE CLARIFICATION (2026-05-19):
+## - ConstructionManager handles ConstructionZone system (firebase building slots)
+## - JobSystem handles clearing/building jobs via WorkerController
+## - Worker assignment handled by WorkerController (bottom-up job finding)
 ##
-## This manager still handles:
+## This manager handles:
 ## - Construction queues for firebase zones
-## - ConstructionZone work processing (old system)
-## - Job registration (tracking only, not processing)
+## - ConstructionZone work processing
 ## - Creating firebases
 
 signal construction_queued(firebase: Node3D, building_type: int)
@@ -23,8 +21,7 @@ signal construction_failed(firebase: Node3D, reason: String)
 const Firebase = preload("res://firebase_system/firebase.gd")
 const ConstructionZone = preload("res://firebase_system/construction_zone.gd")
 const BuildingData = preload("res://firebase_system/building_data.gd")
-const JobTypes = preload("res://firebase_system/jobs/job_types.gd")
-const JobNode = preload("res://firebase_system/jobs/job_node.gd")
+const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
 
 ## Construction queue (per firebase)
 var construction_queues: Dictionary = {}  # firebase -> Array of building_types
@@ -32,8 +29,8 @@ var construction_queues: Dictionary = {}  # firebase -> Array of building_types
 ## Active constructions
 var active_constructions: Array[ConstructionZone] = []
 
-## Active JobNodes (for the new job system)
-var active_job_nodes: Array[JobNode] = []
+## Active jobs (for the new job system)
+var active_jobs: Array[UnifiedJob] = []
 
 ## Engineer work rate
 const ENGINEER_WORK_RATE := 1.0  # Work units per second per engineer
@@ -54,9 +51,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_process_active_constructions(delta)
-	# NOTE: Job processing disabled - BuilderAI._process_job_work() is now authoritative
-	# for applying work to JobNodes. This prevents double-work being applied to jobs.
-	# _process_job_nodes(delta)
+	# NOTE: Job processing handled by JobSystem and WorkerController
 	_process_queues()
 	# NOTE: Auto-assignment disabled - BuilderAI is now authoritative for worker assignment
 	# This prevents duplicate assignment conflicts. See BuilderAI._on_job_created() and
@@ -111,88 +106,14 @@ func _process_queues() -> void:
 			queue.pop_front()
 
 
-func _process_job_nodes(delta: float) -> void:
-	"""Process all active job nodes - apply work from assigned workers"""
-	var completed: Array[JobNode] = []
-
-	for job in active_job_nodes:
-		if not is_instance_valid(job):
-			completed.append(job)
-			continue
-
-		# Skip if job can't be worked
-		if not job.can_be_worked():
-			continue
-
-		# Calculate work from assigned workers
-		var work: float = 0.0
-		for worker in job.assigned_workers:
-			if not is_instance_valid(worker):
-				continue
-
-			# Only count workers who are in range
-			if not job.is_worker_in_range(worker):
-				continue
-
-			# Determine worker class and rate
-			var worker_class := _get_worker_class(worker)
-			var rate: float = ENGINEER_WORK_RATE
-			if worker_class == JobTypes.WORKER_BULLDOZER:
-				rate = BULLDOZER_WORK_RATE
-
-			# Apply work rate multiplier
-			var multiplier: float = JobTypes.get_work_rate_multiplier(worker_class, job.job_type)
-			work += rate * multiplier * delta
-
-		if work > 0:
-			job.add_work(work)
-
-		# Check completion
-		if job.completion_state == JobTypes.CompletionState.COMPLETE:
-			completed.append(job)
-
-	# Remove completed jobs
-	for job in completed:
-		active_job_nodes.erase(job)
+func _process_job_nodes(_delta: float) -> void:
+	"""DEPRECATED: Job processing now handled by JobSystem and WorkerController"""
+	pass
 
 
 func _auto_assign_workers_to_jobs() -> void:
-	"""Auto-assign idle workers to pending jobs"""
-	if not auto_assign_enabled:
-		return
-
-	# Get jobs needing workers
-	var job_mgr := get_node_or_null("/root/JobManager")
-	if not job_mgr:
-		return
-
-	var jobs_needing_workers: Array = job_mgr.get_jobs_needing_workers()
-
-	for job in jobs_needing_workers:
-		if not job is JobNode:
-			continue
-
-		var job_node: JobNode = job as JobNode
-		if not job_node.can_be_worked():
-			continue
-
-		if job_node.assigned_workers.size() >= max_workers_per_job:
-			continue
-
-		# Find appropriate workers
-		var required_class: String = JobTypes.get_required_worker_class(job_node.job_type)
-		var workers := _find_idle_workers_for_job(job_node.get_centroid(), required_class)
-
-		# Assign up to max
-		var to_assign: int = mini(
-			workers.size(),
-			max_workers_per_job - job_node.assigned_workers.size()
-		)
-
-		for i in to_assign:
-			var worker: Node3D = workers[i]
-			if job_node.assign_worker(worker):
-				_send_worker_to_job(worker, job_node)
+	"""DEPRECATED: Worker assignment now handled by WorkerController (bottom-up job finding)"""
+	pass
 
 
 func _get_worker_class(worker: Node3D) -> String:
@@ -201,86 +122,23 @@ func _get_worker_class(worker: Node3D) -> String:
 		var data: Resource = worker.get("data")
 		if data:
 			if "is_vehicle" in data and data.is_vehicle:
-				return JobTypes.WORKER_BULLDOZER
-	return JobTypes.WORKER_ENGINEER
+				return "bulldozer"
+	return "engineer"
 
 
-func _find_idle_workers_for_job(position: Vector3, required_class: String) -> Array[Node3D]:
-	"""Find idle workers of the appropriate type near a position"""
-	var result: Array[Node3D] = []
-
-	# Use SpatialHashGrid if available
-	var grid: Node = get_node_or_null("/root/SpatialHashGrid")
-	var units: Array[Node3D] = []
-
-	if grid and grid.has_method("get_units_in_radius"):
-		units = grid.get_units_in_radius(position, auto_assign_radius)
-	else:
-		# Fallback to group search
-		for node in get_tree().get_nodes_in_group("player_units"):
-			if node is Node3D:
-				var unit := node as Node3D
-				if position.distance_to(unit.global_position) <= auto_assign_radius:
-					units.append(unit)
-
-	for unit in units:
-		if not is_instance_valid(unit):
-			continue
-
-		# Check if player controlled
-		if unit.has_method("get") and unit.get("is_player_controlled") != null:
-			if not unit.is_player_controlled:
-				continue
-
-		# Check worker class
-		var worker_class := _get_worker_class(unit)
-
-		# Engineers can do any job, bulldozers only terrain jobs
-		if required_class == JobTypes.WORKER_BULLDOZER:
-			if worker_class != JobTypes.WORKER_BULLDOZER:
-				continue
-		elif not JobTypes.can_worker_do_job(worker_class, JobTypes.JobType.BUILD_STRUCTURE):
-			# Workers that can't build can still do terrain work
-			pass
-
-		# Check if idle
-		if unit.has_method("get") and unit.get("state") != null:
-			var state: int = unit.state
-			if state != 0:  # 0 = IDLE in Squad
-				continue
-
-		# Check if already assigned to a job
-		if _is_worker_assigned_to_job(unit):
-			continue
-
-		result.append(unit)
-
-	# Sort by distance
-	result.sort_custom(func(a: Node3D, b: Node3D):
-		return position.distance_squared_to(a.global_position) < position.distance_squared_to(b.global_position)
-	)
-
-	return result
+func _find_idle_workers_for_job(_position: Vector3, _required_class: String) -> Array[Node3D]:
+	"""DEPRECATED: Worker finding now handled by WorkerController"""
+	return []
 
 
-func _is_worker_assigned_to_job(worker: Node3D) -> bool:
-	"""Check if a worker is already assigned to any job"""
-	for job in active_job_nodes:
-		if is_instance_valid(job) and worker in job.assigned_workers:
-			return true
+func _is_worker_assigned_to_job(_worker: Node3D) -> bool:
+	"""DEPRECATED: Job assignment now handled by WorkerController"""
 	return false
 
 
-func _send_worker_to_job(worker: Node3D, job: JobNode) -> void:
-	"""DEPRECATED: Use BuilderAI.walk_to_job() instead.
-	This method sends workers to centroid, not edge. BuilderAI.walk_to_job()
-	uses get_work_position() which sends workers to nearest edge for area jobs."""
-	push_warning("[ConstructionManager] _send_worker_to_job is deprecated - use BuilderAI.walk_to_job()")
-	if worker.has_method("move_to"):
-		worker.move_to(job.get_centroid())
-		print("[ConstructionManager] Sent %s to job #%d at %s" % [
-			worker.name, job.job_id, job.get_centroid()
-		])
+func _send_worker_to_job(_worker: Node3D, _job: UnifiedJob) -> void:
+	"""DEPRECATED: Worker movement now handled by WorkerController"""
+	pass
 
 
 func _try_start_construction(firebase: Node3D, building_type: int) -> bool:
@@ -300,7 +158,14 @@ func _try_start_construction(firebase: Node3D, building_type: int) -> bool:
 		construction_failed.emit(firebase, "Firebase level too low")
 		return false
 
-	if firebase.supply_level < data.supply_cost:
+	# Check supply affordability via SupplyManager (single source of truth)
+	var supply_mgr := get_node_or_null("/root/SupplyManager")
+	if supply_mgr and supply_mgr.has_method("can_afford"):
+		if not supply_mgr.can_afford(data.supply_cost):
+			construction_failed.emit(firebase, "Insufficient supplies")
+			return false
+	elif firebase.supply_level < data.supply_cost:
+		# Fallback to firebase supply_level if SupplyManager unavailable
 		construction_failed.emit(firebase, "Insufficient supplies")
 		return false
 
@@ -308,15 +173,47 @@ func _try_start_construction(firebase: Node3D, building_type: int) -> bool:
 	if data.requires_cleared_terrain:
 		var clearing_system: Node = get_node_or_null("/root/TerrainClearingSystem")
 		if clearing_system and not clearing_system.is_cleared(zone.global_position):
+			# Instead of failing, route through JobSystem which handles prerequisites
+			var job_system := get_node_or_null("/root/JobSystem")
+			if job_system:
+				print("[ConstructionManager] Terrain not cleared - creating job with prerequisites")
+				var job: UnifiedJob = job_system.create_build_job(
+					zone.global_position,
+					building_type,
+					0.0,  # rotation
+					data.footprint_size
+				)
+				if job:
+					# Store zone reference for when job completes
+					job.metadata["construction_zone"] = zone
+					job.metadata["firebase"] = firebase
+					register_job(job)
+					# Emit progress signal instead of failure
+					construction_queued.emit(firebase, building_type)
+					return true  # Job created successfully, will auto-clear then build
+			# Fallback if JobSystem not available
 			construction_failed.emit(firebase, "Terrain not cleared")
 			return false
 
+	# Consume supply via SupplyManager (single source of truth)
+	var supply_mgr := get_node_or_null("/root/SupplyManager")
+	if supply_mgr and supply_mgr.has_method("consume_global_supply"):
+		if not supply_mgr.consume_global_supply(data.supply_cost):
+			construction_failed.emit(firebase, "Insufficient supplies")
+			return false
+	else:
+		# Fallback to firebase supply_level if SupplyManager unavailable
+		firebase.supply_level -= data.supply_cost
+
 	# Start construction
-	firebase.supply_level -= data.supply_cost
 	zone.start_construction(data)
 	active_constructions.append(zone)
 
 	construction_started.emit(firebase, zone)
+
+	# Emit supply consumed signal for HUD updates
+	if BattleSignals:
+		BattleSignals.supply_consumed.emit(firebase, data.supply_cost, data.display_name)
 
 	return true
 
@@ -399,27 +296,22 @@ func cancel_construction(zone: ConstructionZone) -> void:
 
 
 ## =============================================================================
-## JOB NODE INTEGRATION
+## JOB INTEGRATION (New JobSystem)
 ## =============================================================================
 
-func register_job(job: JobNode) -> void:
-	"""Register a JobNode for worker assignment and progress tracking"""
-	if job and job not in active_job_nodes:
-		active_job_nodes.append(job)
-
-		# Connect to job signals
-		job.job_completed.connect(_on_job_node_completed)
-		job.job_cancelled.connect(_on_job_node_cancelled)
-
+func register_job(job: UnifiedJob) -> void:
+	"""Register a job for tracking"""
+	if job and job not in active_jobs:
+		active_jobs.append(job)
 		print("[ConstructionManager] Registered job #%d: %s" % [
-			job.job_id, JobTypes.get_job_name(job.job_type)
+			job.job_id, UnifiedJob.get_type_name(job.job_type)
 		])
 
 
-func unregister_job(job: JobNode) -> void:
-	"""Unregister a JobNode"""
-	if job in active_job_nodes:
-		active_job_nodes.erase(job)
+func unregister_job(job: UnifiedJob) -> void:
+	"""Unregister a job"""
+	if job in active_jobs:
+		active_jobs.erase(job)
 
 
 func enqueue_build_with_prerequisites(
@@ -427,50 +319,147 @@ func enqueue_build_with_prerequisites(
 	building_type: int,
 	rotation: float = 0.0,
 	footprint_size: Vector2 = Vector2(4.0, 4.0)
-) -> JobNode:
-	"""Create a build job with automatic prerequisite chain (Clear -> Flatten -> Build)"""
-	var job_mgr := get_node_or_null("/root/JobManager")
-	if not job_mgr:
-		push_error("[ConstructionManager] JobManager not found")
+) -> UnifiedJob:
+	"""Create a build job via JobSystem with automatic clear/flatten prerequisites.
+	This is the preferred method for construction as it handles terrain clearing automatically."""
+	var job_system := get_node_or_null("/root/JobSystem")
+	if not job_system:
+		push_error("[ConstructionManager] JobSystem not found")
 		return null
 
-	var job: JobNode = job_mgr.enqueue_build_with_prerequisites(
-		position, building_type, rotation, footprint_size
+	# Use create_build_job which handles prerequisites (CLEAR_TERRAIN → FLATTEN_AREA → BUILD)
+	var job: UnifiedJob = job_system.create_build_job(
+		position,
+		building_type,
+		rotation,
+		footprint_size
 	)
 
 	if job:
 		register_job(job)
-
-		# Also register prerequisites
-		for prereq in job.prerequisites:
-			if is_instance_valid(prereq):
-				register_job(prereq)
-				# And nested prereqs
-				for nested in prereq.prerequisites:
-					if is_instance_valid(nested):
-						register_job(nested)
+		print("[ConstructionManager] Enqueued build job #%d with prerequisites for building type %d" % [
+			job.job_id, building_type
+		])
 
 	return job
 
 
 func get_active_job_count() -> int:
-	"""Get number of active job nodes"""
+	"""Get number of active jobs"""
 	var count := 0
-	for job in active_job_nodes:
+	for job in active_jobs:
 		if is_instance_valid(job):
 			count += 1
 	return count
 
 
-func _on_job_node_completed(job: JobNode) -> void:
+func _on_job_completed(job: UnifiedJob) -> void:
 	"""Handle job completion"""
 	unregister_job(job)
 	print("[ConstructionManager] Job #%d completed" % job.job_id)
 
 
-func _on_job_node_cancelled(job: JobNode) -> void:
+func _on_job_cancelled(job: UnifiedJob) -> void:
 	"""Handle job cancellation"""
 	unregister_job(job)
+
+
+## =============================================================================
+## BUILDING SPAWNING (Called by ConstructionSiteNode on completion)
+## =============================================================================
+
+var _building_container: Node3D = null
+
+func _get_building_container() -> Node3D:
+	"""Get or create container for spawned buildings"""
+	if not is_instance_valid(_building_container):
+		_building_container = Node3D.new()
+		_building_container.name = "Buildings"
+		get_tree().current_scene.add_child(_building_container)
+	return _building_container
+
+
+func spawn_building_at(world_position: Vector3, building_type: int, rotation_y: float = 0.0) -> Node3D:
+	"""Spawn a completed building at the given position.
+	Called by ConstructionSiteNode when construction completes."""
+
+	# Get building data
+	var data: BuildingData = BuildingData.get_building_data(building_type)
+	var display_name: String = data.display_name if data else "Building"
+
+	# Look up model path from ConstructionZone.BUILDING_MODELS
+	var model_path: String = ""
+	if building_type in ConstructionZone.BUILDING_MODELS:
+		model_path = ConstructionZone.BUILDING_MODELS[building_type]
+
+	# Try to load the model
+	var building: Node3D = null
+	if not model_path.is_empty() and ResourceLoader.exists(model_path):
+		var scene: PackedScene = load(model_path)
+		if scene:
+			building = scene.instantiate()
+			building.name = display_name.replace(" ", "_")
+			print("[ConstructionManager] Spawned %s from %s" % [display_name, model_path])
+
+	# Fallback to placeholder box if model not found
+	if not building:
+		building = _create_placeholder_building(data, building_type)
+		print("[ConstructionManager] Created placeholder for %s (model not found: %s)" % [display_name, model_path])
+
+	# Position and rotate
+	building.position = world_position
+	building.rotation.y = rotation_y
+
+	# Add to container
+	_get_building_container().add_child(building)
+
+	# Add to buildings group for easy lookup
+	building.add_to_group("buildings")
+	building.add_to_group("player_buildings")
+
+	# Store building type as metadata
+	building.set_meta("building_type", building_type)
+	building.set_meta("building_data", data)
+
+	return building
+
+
+func _create_placeholder_building(data: BuildingData, building_type: int) -> Node3D:
+	"""Create a colored placeholder box for buildings without models"""
+	var placeholder := Node3D.new()
+	placeholder.name = "Placeholder_" + str(building_type)
+
+	var mesh_instance := MeshInstance3D.new()
+	var box := BoxMesh.new()
+
+	# Size from building data or default
+	var size := Vector3(4, 3, 4)
+	if data:
+		size = Vector3(data.footprint_size.x, 3.0, data.footprint_size.y)
+
+	box.size = size
+	mesh_instance.mesh = box
+	mesh_instance.position.y = size.y * 0.5  # Raise to sit on ground
+
+	# Color based on building category
+	var mat := StandardMaterial3D.new()
+	var category: int = data.category if data else 0
+	match category:
+		BuildingData.BuildingCategory.FIREBASE_PERIMETER:
+			mat.albedo_color = Color(0.6, 0.5, 0.4)  # Brown
+		BuildingData.BuildingCategory.FIREBASE_SUPPORT:
+			mat.albedo_color = Color(0.4, 0.6, 0.4)  # Green
+		BuildingData.BuildingCategory.FIREBASE_LIVING:
+			mat.albedo_color = Color(0.5, 0.5, 0.6)  # Gray-blue
+		BuildingData.BuildingCategory.FIREBASE_HEAVY:
+			mat.albedo_color = Color(0.5, 0.4, 0.3)  # Dark brown
+		_:
+			mat.albedo_color = Color(0.5, 0.5, 0.5)  # Gray
+
+	mesh_instance.material_override = mat
+	placeholder.add_child(mesh_instance)
+
+	return placeholder
 
 
 ## =============================================================================
