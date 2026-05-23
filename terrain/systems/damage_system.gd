@@ -113,21 +113,19 @@ func apply_damage(world_pos: Vector3, type: DamageType, intensity: float = 1.0) 
 
 	# Create crater modifier function
 	var crater_func := func(current_height: float, falloff_amount: float) -> float:
-		# Crater shape: depression in center, rim at edge
-		var rim_dist: float = 1.0 - falloff_amount  # Distance from center (0-1)
+		# Smooth crater profile: continuous depression + rim curves (no hard boundaries)
+		# falloff_amount: 1.0 at center, 0.0 at edge
 
-		# Crater profile
-		var crater_depth: float = 0.0
-		if rim_dist < 0.7:
-			# Inside crater - depression
-			var inner_falloff: float = pow(1.0 - rim_dist / 0.7, falloff_power)
-			crater_depth = -depth * inner_falloff
-		else:
-			# Rim zone - slight rise
-			var rim_falloff: float = 1.0 - (rim_dist - 0.7) / 0.3
-			crater_depth = rim_height * rim_falloff
+		# Depression curve: peaks at center, fades toward edges
+		var depression: float = depth * smoothstep(0.3, 0.95, falloff_amount) * pow(falloff_amount, falloff_power * 0.5)
 
-		return clampf(current_height + crater_depth, 0.0, 1.0)
+		# Rim curve: ring around crater, fades at both inner and outer edges
+		# Uses inverted falloff (rim_dist) for intuitive positioning
+		var rim_dist: float = 1.0 - falloff_amount
+		var rim_factor: float = smoothstep(0.5, 0.75, rim_dist) * smoothstep(1.0, 0.85, rim_dist)
+		var rim: float = rim_height * rim_factor
+
+		return clampf(current_height - depression + rim, 0.0, 1.0)
 
 	# Get cell size from terrain manager
 	var cell_size: float = terrain_manager.cell_size

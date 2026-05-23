@@ -53,10 +53,8 @@ func _process(delta: float) -> void:
 	_process_active_constructions(delta)
 	# NOTE: Job processing handled by JobSystem and WorkerController
 	_process_queues()
-	# NOTE: Auto-assignment disabled - BuilderAI is now authoritative for worker assignment
-	# This prevents duplicate assignment conflicts. See BuilderAI._on_job_created() and
-	# BuilderAI._auto_assign_work() for the single source of worker assignment.
-	# _auto_assign_workers_to_jobs()
+	# NOTE: Worker assignment is handled by WorkerController (bottom-up job finding)
+	# Workers autonomously find and claim available jobs - no manual assignment needed
 
 
 func _process_active_constructions(delta: float) -> void:
@@ -196,7 +194,7 @@ func _try_start_construction(firebase: Node3D, building_type: int) -> bool:
 			return false
 
 	# Consume supply via SupplyManager (single source of truth)
-	var supply_mgr := get_node_or_null("/root/SupplyManager")
+	# Note: supply_mgr already fetched at line 162
 	if supply_mgr and supply_mgr.has_method("consume_global_supply"):
 		if not supply_mgr.consume_global_supply(data.supply_cost):
 			construction_failed.emit(firebase, "Insufficient supplies")
@@ -286,6 +284,29 @@ func get_queue_for_firebase(firebase: Node3D) -> Array:
 
 func get_active_construction_count() -> int:
 	return active_constructions.size()
+
+
+func reset() -> void:
+	"""Reset all construction state for scene reloads.
+	Called by test scenes to clear persisted autoload state."""
+	# Clear queues
+	construction_queues.clear()
+
+	# Cancel active constructions
+	for zone in active_constructions:
+		if is_instance_valid(zone):
+			zone.cancel_construction()
+	active_constructions.clear()
+
+	# Clear active jobs (JobSystem handles the actual job cleanup)
+	active_jobs.clear()
+
+	# Clear building container
+	if is_instance_valid(_building_container):
+		for child in _building_container.get_children():
+			child.queue_free()
+
+	print("[ConstructionManager] Reset - cleared all construction state")
 
 
 func cancel_construction(zone: ConstructionZone) -> void:
@@ -420,6 +441,10 @@ func spawn_building_at(world_position: Vector3, building_type: int, rotation_y: 
 	# Store building type as metadata
 	building.set_meta("building_type", building_type)
 	building.set_meta("building_data", data)
+
+	# Initialize defensive structures with fire arc data from BuildingData
+	if building.has_method("initialize_from_building_data") and data:
+		building.initialize_from_building_data(data)
 
 	return building
 

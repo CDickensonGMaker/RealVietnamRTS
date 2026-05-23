@@ -12,19 +12,31 @@ signal unit_selected(unit: Node3D)
 signal unit_deselected(unit: Node3D)
 
 # =============================================================================
+# MORALE SIGNALS (Phase 3)
+# =============================================================================
+signal unit_routing(unit: Node3D)
+signal unit_rallied(unit: Node3D)
+signal unit_morale_broken(unit: Node3D, morale_state: String)
+signal nearby_squad_destroyed(position: Vector3, faction: int)
+
+# =============================================================================
 # COMBAT SIGNALS (Phase 2)
 # =============================================================================
 signal unit_attacked(attacker: Node3D, target: Node3D, weapon_id: String)
 signal unit_suppressed(target: Node3D, amount: float, source: Node3D)
+signal unit_ammo_depleted(unit: Node3D)  ## Emitted when unit runs out of ammo and cannot fire
 signal projectile_impact(position: Vector3, damage_type: int)
 signal artillery_called(position: Vector3, weapon_id: String, rounds: int)
 signal napalm_strike_called(start_pos: Vector3, end_pos: Vector3)
 signal napalm_impact(position: Vector3, radius: float)
+signal bomb_dropped(start_pos: Vector3, target_pos: Vector3, plane_velocity: Vector3)
 
 # =============================================================================
-# FIREBASE SIGNALS (Phase 3)
+# FIREBASE SIGNALS (Phase 3-4)
 # =============================================================================
 signal firebase_established(firebase: Node3D)
+signal firebase_activated(firebase: Node3D)  ## HQ building completed, firebase now provides supply/morale
+signal firebase_deactivated(firebase: Node3D)  ## HQ building destroyed, firebase offline
 signal firebase_under_attack(firebase: Node3D, attacker: Node3D)
 
 # =============================================================================
@@ -40,6 +52,7 @@ signal terrain_cleared(position: Vector3, radius: float)
 signal convoy_departed(convoy: Node3D)
 signal convoy_arrived(convoy: Node3D, destination: Node3D)
 signal supply_delivered(destination: Node3D, amount: float)
+signal supply_consumed(firebase: Node3D, amount: float, reason: String)  ## Emitted when supply is spent (construction, resupply units)
 
 # =============================================================================
 # HELICOPTER SIGNALS (Phase 4)
@@ -118,6 +131,59 @@ signal projectile_fired(from: Vector3, to: Vector3)
 # UI SIGNALS
 # =============================================================================
 signal selection_changed(selected_units: Array)
+
+# =============================================================================
+# VEHICLE COMPONENT SIGNALS (Phase 15 - Men of War style)
+# =============================================================================
+signal vehicle_component_damaged(vehicle: Node3D, component_type: int, current_hp: float)
+signal vehicle_component_destroyed(vehicle: Node3D, component_type: int)
+signal vehicle_crew_killed(vehicle: Node3D, position: int)
+signal vehicle_ammo_explosion(vehicle: Node3D, position: Vector3)
+
+# =============================================================================
+# SUPPLY TRUCK SIGNALS (Phase 4)
+# =============================================================================
+signal supply_truck_departed(truck: Node3D, depot: Node3D, firebase: Node3D)
+signal supply_truck_arrived(truck: Node3D, firebase: Node3D, supply_amount: float)
+signal supply_truck_ambushed(truck: Node3D, position: Vector3)
+
+# =============================================================================
+# GUNSHIP SIGNALS (Phase 5)
+# =============================================================================
+signal gunship_attack_run(gunship: Node3D, target: Node3D)
+signal gunship_winchester(gunship: Node3D)  # Out of ammo
+signal gunship_rtb(gunship: Node3D, reason: String)
+
+# =============================================================================
+# MEDEVAC SIGNALS (Phase 6)
+# =============================================================================
+signal medevac_dispatched(medevac: Node3D, pickup_pos: Vector3)
+signal medevac_patient_loaded(medevac: Node3D, patient: Node3D)
+signal medevac_patient_delivered(medevac: Node3D, patient: Node3D, hospital: Node3D)
+
+# =============================================================================
+# REPUTATION SIGNALS (Phase 8)
+# =============================================================================
+signal reputation_changed(total: float, delta: float, reason: String)
+signal war_crime_committed(incident_type: int, position: Vector3)
+signal medal_awarded(medal_name: String)
+
+# =============================================================================
+# TUNNEL SIGNALS (Phase 9-10)
+# =============================================================================
+signal tunnel_discovered(entrance: Node3D, discoverer: Node3D)
+signal tunnel_collapsed(segment: Node3D)
+signal tunnel_rat_entered(tunnel_rat: Node3D, entrance: Node3D)
+signal tunnel_segment_cleared(tunnel_rat: Node3D, segment: Node3D)
+signal tunnel_intel_gathered(tunnel_rat: Node3D, intel_type: String)
+
+# =============================================================================
+# ROUTE PLANNING SIGNALS (Phase 14)
+# =============================================================================
+signal route_calculated(route_id: int, start: Vector3, end: Vector3, path: PackedVector3Array)
+signal route_blocked(route_id: int, blocked_position: Vector3)
+signal threat_detected(position: Vector3, threat_level: int)
+signal threat_cleared(position: Vector3)
 
 func _ready() -> void:
 	print("[BattleSignals] Signal bus initialized")

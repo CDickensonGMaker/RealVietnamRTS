@@ -3,6 +3,9 @@ class_name AAEmplacement
 
 ## Anti-Aircraft Gun Emplacement
 ## NVA AA position that denies helicopter operations in area
+## Uses DetectionArea for target acquisition, Tween-based firing.
+
+const DetectionArea = preload("res://battle_system/components/detection_area.gd")
 
 signal helicopter_engaged(helicopter: Node3D)
 signal helicopter_shot_down(helicopter: Node3D)
@@ -24,11 +27,16 @@ enum AAState { HIDDEN, TRACKING, FIRING, RELOADING, DESTROYED }
 var state: AAState = AAState.HIDDEN
 var current_target: Node3D = null
 var ammo_remaining: int = 20
-var _fire_timer: float = 0.0
-var _reload_timer: float = 0.0
-var _detection_timer: float = 0.0
 var _crew_health: int = 4
 var _is_revealed: bool = false
+
+## Tweens for timing (replaces manual timers)
+var _fire_tween: Tween = null
+var _reload_tween: Tween = null
+var _rotation_tween: Tween = null
+
+## Detection system (Area3D-based, targeting aircraft)
+var _detection_area: DetectionArea = null
 
 ## Visual components
 var _gun_mesh: MeshInstance3D = null
@@ -41,9 +49,42 @@ func _ready() -> void:
 
 	_configure_aa_type()
 	_create_visual()
+	_setup_detection_area()
 	ammo_remaining = magazine_size
 
 	print("[AAEmplacement] Initialized - Type: %d, Range: %.0fm" % [aa_type, engagement_range])
+
+
+func _setup_detection_area() -> void:
+	_detection_area = DetectionArea.new()
+	_detection_area.detection_radius = detection_radius
+	# AA emplacement specifically targets aircraft
+	_detection_area.configure_for_aa()
+	_detection_area.target_groups = ["helicopters", "aircraft", "player_units"]
+
+	_detection_area.target_entered.connect(_on_target_detected)
+	_detection_area.target_exited.connect(_on_target_lost)
+	add_child(_detection_area)
+
+
+func _on_target_detected(target: Node3D) -> void:
+	# Only engage helicopters/aircraft that are player-controlled
+	if not target.is_in_group("helicopters") and not target.is_in_group("aircraft"):
+		return
+	if not target.is_in_group("player_units"):
+		return
+
+	if not current_target or not is_instance_valid(current_target):
+		current_target = target
+		helicopter_engaged.emit(target)
+		state = AAState.TRACKING
+		_is_revealed = true
+		print("[AAEmplacement] Engaging helicopter: %s" % target.name)
+
+
+func _on_target_lost(target: Node3D) -> void:
+	if current_target == target:
+		_find_new_target()
 
 
 func _configure_aa_type() -> void:
@@ -115,27 +156,17 @@ func _create_visual() -> void:
 	add_child(area)
 
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	if state == AAState.DESTROYED:
 		return
 
-	_detection_timer += delta
-
-	# Scan for helicopters periodically
-	if _detection_timer >= 0.5:
-		_detection_timer = 0.0
-		_scan_for_helicopters()
-
-	# Update based on state
+	# State machine - most timing now handled by Tweens
 	match state:
 		AAState.HIDDEN:
 			_process_hidden()
 		AAState.TRACKING:
-			_process_tracking(delta)
-		AAState.FIRING:
-			_process_firing(delta)
-		AAState.RELOADING:
-			_process_reloading(delta)
+			_process_tracking()
+		# FIRING and RELOADING states are now Tween-driven
 
 
 func _process_hidden() -> void:
@@ -145,7 +176,7 @@ func _process_hidden() -> void:
 		_is_revealed = true
 
 
-func _process_tracking(delta: float) -> void:
+func _process_tracking() -> void:
 	"""Track target helicopter"""
 	if not current_target or not is_instance_valid(current_target):
 		_find_new_target()
@@ -153,26 +184,55 @@ func _process_tracking(delta: float) -> void:
 			state = AAState.HIDDEN
 			return
 
-	# Rotate gun to track target
+	# Rotate gun to track target (smooth)
 	var target_pos: Vector3 = current_target.global_position
-	var direction: Vector3 = (target_pos - global_position).normalized()
-
-	if _gun_mesh:
-		_gun_mesh.look_at(target_pos)
-		# Keep elevation angle within limits
-		_gun_mesh.rotation.x = clampf(_gun_mesh.rotation.x, deg_to_rad(10), deg_to_rad(85))
+	_rotate_gun_to_target(target_pos)
 
 	# Check if in range and can fire
 	var distance: float = global_position.distance_to(target_pos)
 	if distance <= engagement_range:
 		if ammo_remaining > 0:
 			state = AAState.FIRING
-			_fire_timer = 0.0
+			_start_firing()
 
 
-func _process_firing(delta: float) -> void:
-	"""Fire at target"""
-	_fire_timer += delta
+## Smooth rotation to track target
+func _rotate_gun_to_target(target_pos: Vector3) -> void:
+	if not _gun_mesh:
+		return
+
+	# Calculate target rotation
+	var direction := (target_pos - global_position).normalized()
+	var target_yaw := atan2(direction.x, direction.z)
+	var target_pitch := -asin(direction.y)  # Negative because look_at uses different convention
+	target_pitch = clampf(target_pitch, deg_to_rad(10), deg_to_rad(85))
+
+	# Use tween for smooth rotation (fast for AA tracking)
+	if _rotation_tween:
+		_rotation_tween.kill()
+
+	_rotation_tween = create_tween()
+	_rotation_tween.set_trans(Tween.TRANS_SINE)
+	_rotation_tween.set_ease(Tween.EASE_OUT)
+	_rotation_tween.set_parallel(true)
+	_rotation_tween.tween_property(_gun_mesh, "rotation:y", target_yaw, 0.1)
+	_rotation_tween.tween_property(_gun_mesh, "rotation:x", target_pitch, 0.1)
+
+
+## Start Tween-based firing loop
+func _start_firing() -> void:
+	if _fire_tween:
+		_fire_tween.kill()
+
+	# Fire first burst after short delay
+	_fire_tween = create_tween()
+	_fire_tween.tween_callback(_fire_volley).set_delay(burst_interval * 0.5)
+
+
+## Fire a burst and schedule next
+func _fire_volley() -> void:
+	if state != AAState.FIRING:
+		return
 
 	if not current_target or not is_instance_valid(current_target):
 		state = AAState.TRACKING
@@ -184,57 +244,74 @@ func _process_firing(delta: float) -> void:
 		state = AAState.TRACKING
 		return
 
-	# Fire bursts
-	if _fire_timer >= burst_interval:
-		_fire_timer = 0.0
-		_fire_burst()
+	# Fire the burst
+	_fire_burst()
+
+	# Schedule next burst if still firing
+	if state == AAState.FIRING and ammo_remaining > 0:
+		if _fire_tween:
+			_fire_tween.kill()
+		_fire_tween = create_tween()
+		_fire_tween.tween_callback(_fire_volley).set_delay(burst_interval)
 
 
-func _process_reloading(delta: float) -> void:
-	"""Reload magazine"""
-	_reload_timer += delta
-
-	if _reload_timer >= reload_time:
-		_reload_timer = 0.0
-		ammo_remaining = magazine_size
-		state = AAState.TRACKING
-		print("[AAEmplacement] Reloaded")
+## Stop firing loop
+func _stop_firing() -> void:
+	if _fire_tween:
+		_fire_tween.kill()
+		_fire_tween = null
 
 
-func _scan_for_helicopters() -> void:
-	"""Scan for helicopters in detection range"""
-	if current_target and is_instance_valid(current_target):
-		return  # Already have target
+## Start reload using Tween
+func _start_reloading() -> void:
+	state = AAState.RELOADING
 
-	var helicopters: Array[Node] = get_tree().get_nodes_in_group("helicopters")
+	if _reload_tween:
+		_reload_tween.kill()
 
-	for heli in helicopters:
-		if not is_instance_valid(heli):
-			continue
+	_reload_tween = create_tween()
+	_reload_tween.tween_callback(_finish_reloading).set_delay(reload_time)
 
-		# Only target player helicopters
-		if not heli.is_in_group("player_units"):
-			continue
 
-		var distance: float = global_position.distance_to(heli.global_position)
-		if distance <= detection_radius:
-			current_target = heli
-			helicopter_engaged.emit(heli)
-			print("[AAEmplacement] Engaging helicopter: %s" % heli.name)
-			break
+## Finish reloading
+func _finish_reloading() -> void:
+	ammo_remaining = magazine_size
+	state = AAState.TRACKING
+	print("[AAEmplacement] Reloaded")
 
 
 func _find_new_target() -> void:
-	"""Find a new target helicopter"""
+	"""Find a new target helicopter using DetectionArea"""
 	current_target = null
-	_scan_for_helicopters()
+	_stop_firing()
+
+	if not _detection_area:
+		state = AAState.HIDDEN
+		return
+
+	# Get closest target from DetectionArea
+	var new_target := _detection_area.get_closest_target()
+
+	if new_target:
+		# Verify it's a helicopter/aircraft and player-controlled
+		if (new_target.is_in_group("helicopters") or new_target.is_in_group("aircraft")) \
+				and new_target.is_in_group("player_units"):
+			current_target = new_target
+			state = AAState.TRACKING
+			helicopter_engaged.emit(new_target)
+			print("[AAEmplacement] Engaging helicopter: %s" % new_target.name)
+			return
+
+	state = AAState.HIDDEN
 
 
 func _fire_burst() -> void:
 	"""Fire a burst at target"""
 	if ammo_remaining <= 0:
-		state = AAState.RELOADING
-		_reload_timer = 0.0
+		_start_reloading()
+		return
+
+	if not current_target or not is_instance_valid(current_target):
 		return
 
 	ammo_remaining -= 1
@@ -247,7 +324,7 @@ func _fire_burst() -> void:
 	hit_chance += (1.0 - distance / engagement_range) * 0.3
 
 	# Worse accuracy if target is moving fast
-	if current_target.has_method("get") and current_target.get("velocity"):
+	if "velocity" in current_target:
 		var speed: float = current_target.velocity.length()
 		hit_chance -= speed * 0.01
 
@@ -260,18 +337,20 @@ func _fire_burst() -> void:
 			current_target.take_damage(damage_per_burst, self)
 
 			# Check if destroyed
-			if current_target.has_method("get") and current_target.get("current_health"):
+			if "current_health" in current_target:
 				if current_target.current_health <= 0:
 					helicopter_shot_down.emit(current_target)
 					print("[AAEmplacement] Helicopter shot down!")
 					current_target = null
+					_stop_firing()
 
 	# Visual effect
 	_spawn_tracer_effect()
 
 	# Emit signal
 	if BattleSignals:
-		BattleSignals.projectile_fired.emit(global_position, current_target.global_position if current_target else Vector3.ZERO)
+		var target_pos := current_target.global_position if current_target else Vector3.ZERO
+		BattleSignals.projectile_fired.emit(global_position, target_pos)
 
 
 func _spawn_tracer_effect() -> void:
@@ -295,6 +374,18 @@ func take_damage(amount: float, _source: Node = null) -> void:
 func _destroy() -> void:
 	"""Destroy the AA emplacement"""
 	state = AAState.DESTROYED
+
+	# Stop all tweens
+	if _fire_tween:
+		_fire_tween.kill()
+		_fire_tween = null
+	if _reload_tween:
+		_reload_tween.kill()
+		_reload_tween = null
+	if _rotation_tween:
+		_rotation_tween.kill()
+		_rotation_tween = null
+
 	emplacement_destroyed.emit(self)
 
 	# Visual destruction

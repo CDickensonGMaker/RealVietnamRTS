@@ -6,8 +6,7 @@ extends MeshInstance3D
 ## Updates progressively as the BUILD_ROAD job progresses, showing only
 ## the completed portion of the road.
 
-const JobTypes = preload("res://firebase_system/jobs/job_types.gd")
-const JobNode = preload("res://firebase_system/jobs/job_node.gd")
+const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
 
 ## Road configuration
 const DEFAULT_ROAD_WIDTH := 3.0
@@ -23,8 +22,8 @@ var _waypoints: PackedVector3Array = PackedVector3Array()
 var _road_width: float = DEFAULT_ROAD_WIDTH
 var _progress: float = 0.0  # 0.0 to 1.0
 
-## Connected job node (if any)
-var _job_node: JobNode = null
+## Connected job (if any)
+var _job: UnifiedJob = null
 
 ## Terrain reference
 var _terrain: Node = null
@@ -59,17 +58,18 @@ func setup(waypoints: PackedVector3Array, width: float = DEFAULT_ROAD_WIDTH) -> 
 	rebuild_mesh()
 
 
-## Connect to a job node for progressive rendering
-func connect_to_job(job: JobNode) -> void:
-	if _job_node and _job_node.job_progress_updated.is_connected(_on_job_progress):
-		_job_node.job_progress_updated.disconnect(_on_job_progress)
+## Connect to a job for progressive rendering
+func connect_to_job(job: UnifiedJob) -> void:
+	if _job and _job.progress_changed.is_connected(_on_job_progress):
+		_job.progress_changed.disconnect(_on_job_progress)
 
-	_job_node = job
+	_job = job
 
-	if _job_node:
-		_job_node.job_progress_updated.connect(_on_job_progress)
-		_waypoints = _job_node.path_points
-		_progress = _job_node.current_progress / _job_node.total_work
+	if _job:
+		_job.progress_changed.connect(_on_job_progress)
+		if _job.metadata.has("path_points"):
+			_waypoints = _job.metadata["path_points"]
+		_progress = _job.work_progress / _job.work_required if _job.work_required > 0 else 0.0
 		rebuild_mesh()
 
 
@@ -239,9 +239,9 @@ func _get_terrain_height(pos: Vector3) -> float:
 	return pos.y
 
 
-func _on_job_progress(_progress_amount: float) -> void:
-	if _job_node:
-		_progress = _job_node.current_progress / _job_node.total_work
+func _on_job_progress() -> void:
+	if _job:
+		_progress = _job.work_progress / _job.work_required if _job.work_required > 0 else 0.0
 		rebuild_mesh()
 
 
@@ -254,7 +254,7 @@ static func create_for_waypoints(waypoints: PackedVector3Array, width: float = D
 	return road
 
 
-static func create_for_job(job: JobNode) -> RoadDecalRenderer:
+static func create_for_job(job: UnifiedJob) -> RoadDecalRenderer:
 	var road := RoadDecalRenderer.new()
 	road.name = "RoadDecal_Job%d" % job.job_id
 	road.connect_to_job(job)

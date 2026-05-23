@@ -48,6 +48,9 @@ var _in_progress_jobs: Array[UnifiedJobClass] = []
 @export var job_update_interval: float = 0.1  # How often to check job states
 var _update_timer: float = 0.0
 
+## DEBUG: Multiplier for work speed (set to 1.0 for normal, 50.0 for 5000% speed)
+const DEBUG_WORK_MULTIPLIER: float = 50.0
+
 ## Container for job-related nodes
 var _node_container: Node3D = null
 
@@ -291,18 +294,28 @@ func create_build_job(center: Vector3, building_type: int, rotation: float = 0.0
 			if BattleSignals:
 				BattleSignals.supply_consumed.emit(firebase, float(supply_cost), "construction: " + data.display_name)
 
-	# Create prerequisite jobs
-	var prereqs: Dictionary = _create_prerequisites(center, footprint_size, rotation)
+	# Create prerequisite jobs with HIGH priority to match the build job
+	var prereqs: Dictionary = _create_prerequisites(center, footprint_size, rotation, UnifiedJobClass.Priority.HIGH)
 
-	# Create build job
-	var build_job: UnifiedJobClass = create_job(
+	# Create build job - we need to set metadata BEFORE _create_job_node runs
+	# because ConstructionSiteNode needs building_type and rotation during creation.
+	# So we manually create the job instead of using create_job() helper.
+	var build_job: UnifiedJobClass = UnifiedJobClass.create(
 		UnifiedJobClass.Type.BUILD_STRUCTURE,
 		center,
-		footprint_size,
-		UnifiedJobClass.Priority.HIGH
+		footprint_size
 	)
+	build_job.priority = UnifiedJobClass.Priority.HIGH
+
+	# Set metadata BEFORE creating the visual node
 	build_job.metadata["building_type"] = building_type
 	build_job.metadata["rotation"] = rotation
+
+	# Now create the ConstructionSiteNode (it will read the metadata we just set)
+	_create_job_node(build_job, center, footprint_size)
+
+	# Register the job with the system
+	_register_job(build_job)
 
 	# Store supply info for refund on cancel (Phase 4)
 	build_job.metadata["supply_cost"] = supply_cost
@@ -391,6 +404,34 @@ func _unregister_job(job: UnifiedJobClass) -> void:
 	_in_progress_jobs.erase(job)
 
 
+func reset() -> void:
+	"""Hard reset for scene reloads. This autoload survives scene changes, so without
+	this every reload inherits the previous run's jobs and their visual nodes.
+	Frees nodes directly (no supply refund / cancel signals) - it's a clean slate."""
+	# Free each job's visual node (construction sites, clearing zones, trenches, etc.)
+	for job in jobs.values():
+		if not is_instance_valid(job):
+			continue
+		var node: Node = job.metadata.get("job_node")
+		if is_instance_valid(node):
+			node.queue_free()
+
+	# Free anything still parented to the container as a safety net
+	if is_instance_valid(_node_container):
+		for child in _node_container.get_children():
+			child.queue_free()
+
+	jobs.clear()
+	_job_grid.clear()
+	_pending_jobs.clear()
+	_ready_jobs.clear()
+	_in_progress_jobs.clear()
+	_validation_cache.clear()
+	_validation_cache_frame = -1
+
+	print("[JobSystem] Reset - cleared all jobs and freed job nodes")
+
+
 ## =============================================================================
 ## JOB QUERIES
 ## =============================================================================
@@ -398,6 +439,15 @@ func _unregister_job(job: UnifiedJobClass) -> void:
 func get_job(job_id: int) -> UnifiedJobClass:
 	"""Get a job by ID"""
 	return jobs.get(job_id) as UnifiedJobClass
+
+
+func get_all_jobs() -> Array[UnifiedJobClass]:
+	"""Get all jobs as an array (for daemon enumeration)"""
+	var result: Array[UnifiedJobClass] = []
+	for job in jobs.values():
+		if is_instance_valid(job):
+			result.append(job)
+	return result
 
 
 func get_jobs_at_cell(cell: Vector2i) -> Array[UnifiedJobClass]:
@@ -454,17 +504,29 @@ func get_jobs_needing_workers(worker_class: String = "") -> Array[UnifiedJobClas
 	"""Get jobs that need workers, optionally filtered by worker class"""
 	var result: Array[UnifiedJobClass] = []
 
+	# Debug: Show state of job lists
+	if _ready_jobs.size() > 0 or _in_progress_jobs.size() > 0:
+		print("[JobSystem] get_jobs_needing_workers(%s): %d ready, %d in_progress" % [
+			worker_class, _ready_jobs.size(), _in_progress_jobs.size()
+		])
+
 	for job in _ready_jobs + _in_progress_jobs:
 		if not is_instance_valid(job):
 			continue
 		if job.assigned_workers.size() >= job.max_workers:
 			continue
 		if not job.can_be_worked():
+			print("[JobSystem] Job #%d not workable (state=%d, prereqs=%d)" % [
+				job.job_id, job.state, job.prerequisites.size()
+			])
 			continue
 
 		# Filter by worker class if specified
 		if worker_class != "":
 			if not can_worker_do_job(worker_class, job.job_type):
+				print("[JobSystem] Job #%d type %d not for worker class %s" % [
+					job.job_id, job.job_type, worker_class
+				])
 				continue
 
 		result.append(job)
@@ -499,10 +561,10 @@ func get_best_job_for_worker(worker: Node3D, worker_class: String, max_distance:
 		if dist > max_distance:
 			continue
 
-		# Score = priority_weight + capacity_bonus - distance_penalty
+		# Score = priority_weight + capacity_bonus - distance_penalty - crowding_penalty
 		# Lower priority value = higher weight
 		var priority_weight: float = (4 - job.priority) * 50.0  # 200 for CRITICAL, 50 for LOW
-		var distance_penalty: float = dist * 0.5
+		var distance_penalty: float = dist * 2.0  # Strong distance penalty to favor nearest jobs
 
 		# Capacity-based scoring (StarCraft fix):
 		# - Bonus for jobs that need workers (+5 per open slot)
@@ -511,13 +573,25 @@ func get_best_job_for_worker(worker: Node3D, worker_class: String, max_distance:
 		if job.assigned_workers.size() == 0:
 			capacity_bonus += 20.0  # Extra bonus to start new jobs
 
-		var score: float = priority_weight + capacity_bonus - distance_penalty
+		# Crowding penalty: strongly discourage multiple workers from piling onto same job
+		# This spreads workers across available jobs even when they evaluate simultaneously
+		# The penalty scales with worker count to make subsequent assignments progressively worse
+		var workers_on_job: int = job.assigned_workers.size()
+		var crowding_penalty: float = workers_on_job * 40.0  # -40 per worker already assigned
+		if workers_on_job >= 2:
+			crowding_penalty += (workers_on_job - 1) * 20.0  # Extra penalty for 3+ workers
+
+		var score: float = priority_weight + capacity_bonus - distance_penalty - crowding_penalty
 
 		# Priority multiplier for urgent jobs
 		if job.priority == UnifiedJobClass.Priority.CRITICAL:
 			score *= 1.5
 		elif job.priority == UnifiedJobClass.Priority.HIGH:
 			score *= 1.2
+
+		# Small random noise to break ties and prevent deterministic bunching
+		# ±10 points of noise helps spread workers when jobs have similar scores
+		score += randf_range(-10.0, 10.0)
 
 		if score > best_score:
 			best_score = score
@@ -535,7 +609,14 @@ func add_work(job: UnifiedJobClass, worker: Node3D, delta: float) -> void:
 	if not is_instance_valid(job) or not is_instance_valid(worker):
 		return
 
-	if not job.is_worker_in_range(worker):
+	# Use generous range (4.0m) to match WorkerController's arrival threshold
+	# Prevents workers from arriving but failing to apply work due to range mismatch
+	if not job.is_worker_in_range(worker, 4.0):
+		# Debug: Log when work fails due to range
+		var dist_to_bounds: float = _get_distance_to_bounds(job, worker)
+		print("[JobSystem] %s out of range for job #%d (dist=%.1fm, need<=4.0m)" % [
+			worker.name, job.job_id, dist_to_bounds
+		])
 		return
 
 	# Calculate work rate based on worker type
@@ -547,7 +628,7 @@ func add_work(job: UnifiedJobClass, worker: Node3D, delta: float) -> void:
 
 	# Apply job-type multiplier
 	var multiplier: float = get_work_rate_multiplier(worker_class, job.job_type)
-	var work_amount: float = base_rate * multiplier * delta
+	var work_amount: float = base_rate * multiplier * delta * DEBUG_WORK_MULTIPLIER
 
 	job.add_work(work_amount)
 
@@ -555,59 +636,65 @@ func add_work(job: UnifiedJobClass, worker: Node3D, delta: float) -> void:
 	_add_work_to_node(job, work_amount)
 
 
+func _get_distance_to_bounds(job: UnifiedJobClass, worker: Node3D) -> float:
+	"""Helper to calculate distance to job bounds for debugging"""
+	var worker_pos: Vector3 = worker.global_position
+	var closest: Vector3 = Vector3(
+		clampf(worker_pos.x, job.world_bounds.position.x, job.world_bounds.end.x),
+		worker_pos.y,
+		clampf(worker_pos.z, job.world_bounds.position.z, job.world_bounds.end.z)
+	)
+	return worker_pos.distance_to(closest)
+
+
 func _add_work_to_node(job: UnifiedJobClass, work_amount: float) -> void:
 	"""Forward work progress to the job's visual node"""
 	var node: Node = job.metadata.get("job_node")
 
-	# Normalize work amount to 0-1 progress based on job work required
-	var progress_amount: float = work_amount / job.work_required if job.work_required > 0 else 0.0
+	# Visual nodes expect a 0-1 progress fraction (1.0 = complete)
+	var progress_0_to_1: float = (work_amount / job.work_required) if job.work_required > 0 else 0.0
 
 	match job.job_type:
 		UnifiedJobClass.Type.CLEAR_TERRAIN:
-			# ClearingZoneNode
-			if is_instance_valid(job.clearing_zone) and job.clearing_zone.has_method("add_work"):
-				var zone_complete: bool = job.clearing_zone.add_work(progress_amount)
-				if zone_complete:
-					job.set_state(UnifiedJobClass.State.COMPLETE)
+			# Trees are felled individually by workers (see WorkerController._process_chopping).
+			# The zone is now just a footprint decal + progress bar driven by felled/total.
+			if is_instance_valid(job.clearing_zone) and job.clearing_zone.has_method("set_progress"):
+				job.clearing_zone.set_progress(job.get_progress())
 
 		UnifiedJobClass.Type.BUILD_STRUCTURE:
-			# ConstructionSiteNode
+			# ConstructionSiteNode handles visual progress only
+			# Job completion is handled by job.add_work() when work_done >= work_required
+			# Do NOT use node's return value - it completes based on internal progress, not work units
 			if is_instance_valid(node) and node.has_method("add_work"):
-				var complete: bool = node.add_work(progress_amount)
-				if complete:
-					job.set_state(UnifiedJobClass.State.COMPLETE)
+				node.add_work(progress_0_to_1)
 
 		UnifiedJobClass.Type.DIG_TRENCH:
-			# TrenchNode
+			# TrenchNode handles visual progress only
+			# Job completion is handled by job.add_work() when work_done >= work_required
 			if is_instance_valid(node) and node.has_method("add_work"):
-				var complete: bool = node.add_work(progress_amount)
-				if complete:
-					job.set_state(UnifiedJobClass.State.COMPLETE)
+				node.add_work(progress_0_to_1)
 
 		UnifiedJobClass.Type.LAY_WIRE:
-			# WireObstacleNode
+			# WireObstacleNode handles visual progress only
+			# Job completion is handled by job.add_work() when work_done >= work_required
 			if is_instance_valid(node) and node.has_method("add_work"):
-				var complete: bool = node.add_work(progress_amount)
-				if complete:
-					job.set_state(UnifiedJobClass.State.COMPLETE)
+				node.add_work(progress_0_to_1)
 
 		UnifiedJobClass.Type.BUILD_ROAD:
-			# RoadSegmentNode
+			# RoadSegmentNode handles visual progress only
+			# Job completion is handled by job.add_work() when work_done >= work_required
 			if is_instance_valid(node) and node.has_method("add_work"):
-				var complete: bool = node.add_work(progress_amount)
-				if complete:
-					job.set_state(UnifiedJobClass.State.COMPLETE)
+				node.add_work(progress_0_to_1)
 
 		UnifiedJobClass.Type.FILL_CRATER:
-			# CraterNode
+			# CraterNode handles visual progress only
+			# Job completion is handled by job.add_work() when work_done >= work_required
 			if is_instance_valid(node) and node.has_method("add_work"):
-				var complete: bool = node.add_work(progress_amount)
-				if complete:
-					job.set_state(UnifiedJobClass.State.COMPLETE)
+				node.add_work(progress_0_to_1)
 
 		UnifiedJobClass.Type.FLATTEN_AREA:
-			# Progressive terrain flattening - actually modify terrain mesh
-			_apply_progressive_flattening(job, progress_amount)
+			# Carving is worker/cell-driven (WorkerController._process_carving); no AOE here.
+			pass
 
 
 func get_work_positions(job: UnifiedJobClass, worker_count: int) -> PackedVector3Array:
@@ -635,59 +722,69 @@ func get_work_positions(job: UnifiedJobClass, worker_count: int) -> PackedVector
 ## TERRAIN FLATTENING
 ## =============================================================================
 
-func _apply_progressive_flattening(job: UnifiedJobClass, progress_amount: float) -> void:
-	"""Apply progressive terrain flattening as workers do work"""
-	# Get terrain engine
+func _get_terrain() -> Node:
+	"""Terrain engine for height read/write (UnifiedTerrain preferred)."""
 	var terrain: Node = get_node_or_null("/root/UnifiedTerrain")
 	if not terrain:
-		# Fallback to TerrainIntegration
 		terrain = get_node_or_null("/root/TerrainIntegration")
-	if not terrain or not terrain.has_method("flatten_area"):
-		# Check if it has modify_terrain instead
-		if not terrain or not terrain.has_method("modify_terrain"):
-			return
+	return terrain
 
-	# Calculate current progress
-	var current_progress: float = job.work_done / job.work_required if job.work_required > 0 else 0.0
 
-	# Store target height on first flattening call
-	if not job.metadata.has("flatten_target_height"):
-		if terrain.has_method("get_height_at"):
-			job.metadata["flatten_target_height"] = terrain.get_height_at(job.get_centroid())
-		else:
-			job.metadata["flatten_target_height"] = 0.0
-		job.metadata["last_flatten_progress"] = 0.0
+func get_terrain_height_at(world_pos: Vector3) -> float:
+	"""Convenience height read for workers (carve loop checks cell height vs target)."""
+	var terrain := _get_terrain()
+	if terrain and terrain.has_method("get_height_at"):
+		return terrain.get_height_at(world_pos)
+	return 0.0
 
-	var target_height: float = job.metadata.get("flatten_target_height", 0.0) as float
-	var last_progress: float = job.metadata.get("last_flatten_progress", 0.0) as float
 
-	# Only flatten if progress has increased significantly (every 10%)
-	var progress_threshold: float = 0.1
-	if current_progress - last_progress >= progress_threshold or current_progress >= 1.0:
-		# Calculate flattening strength based on progress (0-1)
-		var flatten_strength: float = minf(current_progress, 1.0)
+func get_flatten_target_height(job: UnifiedJobClass) -> float:
+	"""Compute (once) the height a flatten job carves toward. Blends the footprint with the
+	heights of adjacent ALREADY-FLAT/cleared cells so the carved pad links up with neighbours
+	instead of leaving a divot. Cached in job metadata."""
+	if job.metadata.has("flatten_target_height"):
+		return job.metadata["flatten_target_height"]
 
-		# Get job bounds
-		var center: Vector3 = job.get_centroid()
-		var size: Vector2 = Vector2(job.world_bounds.size.x, job.world_bounds.size.z)
+	var terrain := _get_terrain()
+	var target: float = 0.0
+	if terrain and terrain.has_method("get_height_at"):
+		var samples: Array[float] = [terrain.get_height_at(job.get_centroid())]
 
-		# Apply flattening to terrain
-		if terrain.has_method("flatten_area"):
-			# Use flatten_area if available (UnifiedTerrainEngine)
-			terrain.flatten_area(center, size * flatten_strength, target_height)
-		elif terrain.has_method("modify_terrain"):
-			# Fallback to modify_terrain with custom modifier
-			var radius: float = maxf(size.x, size.y) * 0.5 * flatten_strength
-			var modifier := func(h: float, falloff: float) -> float:
-				return lerpf(h, target_height, falloff * flatten_strength)
-			terrain.modify_terrain(center, radius, modifier)
+		# Sample a one-cell ring just outside the footprint; include neighbours that are
+		# already cleared/flat so the pad blends to their height.
+		var has_stage: bool = terrain.has_method("get_clearing_stage")
+		var r: Rect2i = job.cell_rect
+		for x in range(r.position.x - 1, r.end.x + 1):
+			for z in range(r.position.y - 1, r.end.y + 1):
+				# Perimeter ring only
+				if x >= r.position.x and x < r.end.x and z >= r.position.y and z < r.end.y:
+					continue
+				var wp: Vector3 = GridCoordsClass.gameplay_to_world(Vector2i(x, z))
+				if has_stage:
+					# Only blend toward neighbours that are already flat (CLEARED+)
+					var stage: int = terrain.get_clearing_stage(wp)
+					if stage >= 2:  # PARTIALLY_CLEARED/CLEARED and up
+						samples.append(terrain.get_height_at(wp))
 
-		job.metadata["last_flatten_progress"] = current_progress
-		print("[JobSystem] Flattened terrain at %v (progress: %.0f%%)" % [center, current_progress * 100])
+		var sum: float = 0.0
+		for h in samples:
+			sum += h
+		target = sum / float(samples.size())
 
-	# Check if flattening is complete
-	if job.work_done >= job.work_required:
-		job.set_state(UnifiedJobClass.State.COMPLETE)
+	job.metadata["flatten_target_height"] = target
+	return target
+
+
+func carve_terrain_toward(center: Vector3, radius: float, target_height: float, amount: float) -> void:
+	"""Lower/raise terrain within radius toward target_height by `amount` (0-1 per call).
+	Used by a worker carving one cell over several passes."""
+	var terrain := _get_terrain()
+	if not terrain or not terrain.has_method("modify_terrain"):
+		return
+	var step: float = clampf(amount, 0.0, 1.0)
+	var modifier := func(h: float, falloff: float) -> float:
+		return lerpf(h, target_height, clampf(step * falloff, 0.0, 1.0))
+	terrain.modify_terrain(center, radius, modifier)
 
 
 ## =============================================================================
@@ -996,14 +1093,25 @@ func _on_road_complete(job: UnifiedJobClass) -> void:
 ## CONVENIENCE JOB CREATORS
 ## =============================================================================
 
-func _create_prerequisites(center: Vector3, footprint_size: Vector2, rotation_y: float = 0.0) -> Dictionary:
+func _create_prerequisites(center: Vector3, footprint_size: Vector2, rotation_y: float = 0.0,
+						   priority: UnifiedJobClass.Priority = UnifiedJobClass.Priority.NORMAL) -> Dictionary:
 	"""Create clear and flatten prerequisite jobs if needed. Returns {clear_job, flatten_job}
-	   When rotation_y is non-zero, computes axis-aligned bbox of rotated rectangle."""
+	   When rotation_y is non-zero, computes axis-aligned bbox of rotated rectangle.
+	   Prerequisites inherit the parent job's priority for proper worker assignment."""
+	var clearing_system := get_node_or_null("/root/ClearingSystem")
 	var terrain_grid := get_node_or_null("/root/TerrainIntegration")
-	var needs_clearing: bool = true  # Default to needing clearing
+	var needs_clearing: bool = false  # Default to NOT needing clearing (optimistic)
 
-	if terrain_grid and terrain_grid.has_method("is_cleared"):
+	# Check ClearingSystem first (authoritative for clearing state)
+	if clearing_system and clearing_system.has_method("is_cleared"):
+		needs_clearing = not clearing_system.is_cleared(center)
+	elif terrain_grid and terrain_grid.has_method("is_cleared"):
 		needs_clearing = not terrain_grid.is_cleared(center)
+	elif terrain_grid and terrain_grid.has_method("get"):
+		# Check TerrainGrid via TerrainIntegration
+		var tg = terrain_grid.get("terrain_grid")
+		if tg and tg.has_method("is_cleared"):
+			needs_clearing = not tg.is_cleared(center)
 
 	var clear_job: UnifiedJobClass = null
 	var flatten_job: UnifiedJobClass = null
@@ -1031,7 +1139,7 @@ func _create_prerequisites(center: Vector3, footprint_size: Vector2, rotation_y:
 			UnifiedJobClass.Type.CLEAR_TERRAIN,
 			center,
 			clear_size,
-			UnifiedJobClass.Priority.NORMAL
+			priority
 		)
 		# Store rotation in metadata for oriented clearing (future use)
 		if absf(rotation_y) > 0.01:
@@ -1042,7 +1150,7 @@ func _create_prerequisites(center: Vector3, footprint_size: Vector2, rotation_y:
 		UnifiedJobClass.Type.FLATTEN_AREA,
 		center,
 		effective_size,
-		UnifiedJobClass.Priority.NORMAL
+		priority
 	)
 	# Store rotation in metadata for oriented flattening (future use)
 	if absf(rotation_y) > 0.01:
@@ -1059,8 +1167,8 @@ func create_trench_job(center: Vector3, length: float = 8.0, width: float = 2.0,
 	"""Create a trench digging job with clear/flatten prerequisites"""
 	var size := Vector2(length, width)
 
-	# Create prerequisite jobs (with rotation for oriented clearing)
-	var prereqs: Dictionary = _create_prerequisites(center, size, rotation_y)
+	# Create prerequisite jobs (with rotation for oriented clearing, inherit priority)
+	var prereqs: Dictionary = _create_prerequisites(center, size, rotation_y, priority)
 
 	# Create the trench job
 	var job: UnifiedJobClass = create_job(UnifiedJobClass.Type.DIG_TRENCH, center, size, priority)
@@ -1199,13 +1307,21 @@ enum PlacementError {
 	OVERLAPS_JOB,       # Would overlap existing construction job
 	TERRAIN_TOO_STEEP,  # Slope exceeds buildable limit
 	TERRAIN_WATER,      # Position is in water
-	INSUFFICIENT_SUPPLY # Not enough supply (handled in create_build_job)
+	INSUFFICIENT_SUPPLY, # Not enough supply (handled in create_build_job)
+	OUT_OF_BOUNDS,      # Position is outside playable map area
+	OUTSIDE_FIREBASE,   # Firebase Defense building not within TOC influence zone
+	INVALID_BRIDGE_SPAN # Bridge not spanning water or ravine properly
 }
 
 
-func validate_placement(center: Vector3, footprint_size: Vector2, _building_type: int = -1) -> Dictionary:
+func validate_placement(center: Vector3, footprint_size: Vector2, building_type: int = -1, rotation_y: float = 0.0) -> Dictionary:
 	"""Validate if a building can be placed at this location.
 	Returns {valid: bool, error: PlacementError, message: String}"""
+	# Check map bounds first (most common rejection for edge clicks)
+	var bounds_error: Dictionary = _check_map_bounds(center, footprint_size)
+	if not bounds_error.valid:
+		return bounds_error
+
 	# Check for overlapping buildings
 	var overlap_error: Dictionary = _check_building_overlap(center, footprint_size)
 	if not overlap_error.valid:
@@ -1216,6 +1332,20 @@ func validate_placement(center: Vector3, footprint_size: Vector2, _building_type
 	if not job_overlap.valid:
 		return job_overlap
 
+	# Special validation for bridges - must span water or ravine
+	# Bridges skip standard slope/water checks since they're meant to span these
+	if building_type == BuildingDataClass.BuildingType.MODULAR_BRIDGE:
+		var bridge_result: Dictionary = validate_bridge_placement(center, footprint_size, rotation_y)
+		if not bridge_result.valid:
+			return {
+				"valid": false,
+				"error": PlacementError.INVALID_BRIDGE_SPAN,
+				"message": bridge_result.message
+			}
+		# Bridge passed - return success (skip slope/water checks)
+		return {"valid": true, "error": PlacementError.NONE, "message": bridge_result.message}
+
+	# Standard terrain checks for non-bridge buildings
 	# Check terrain slope
 	var slope_error: Dictionary = _check_terrain_slope(center, footprint_size)
 	if not slope_error.valid:
@@ -1225,6 +1355,11 @@ func validate_placement(center: Vector3, footprint_size: Vector2, _building_type
 	var water_error: Dictionary = _check_terrain_water(center)
 	if not water_error.valid:
 		return water_error
+
+	# Check firebase zone requirements (Firebase Defense buildings need TOC influence)
+	var firebase_error: Dictionary = _check_firebase_zone(center, building_type)
+	if not firebase_error.valid:
+		return firebase_error
 
 	# All checks passed
 	return {"valid": true, "error": PlacementError.NONE, "message": ""}
@@ -1361,6 +1496,87 @@ func _check_terrain_water(center: Vector3) -> Dictionary:
 	return {"valid": true, "error": PlacementError.NONE, "message": ""}
 
 
+func _check_map_bounds(center: Vector3, size: Vector2) -> Dictionary:
+	"""Check if position is within playable map bounds"""
+	# Get map size from GridCoords or terrain
+	var map_size: float = 320.0  # Default fallback
+
+	# Try to get actual map size from GridCoords
+	var grid_coords_script = load("res://terrain/core/grid_coords.gd")
+	if grid_coords_script and "map_size" in grid_coords_script:
+		map_size = grid_coords_script.map_size
+	else:
+		# Try terrain integration
+		var terrain: Node = get_node_or_null("/root/TerrainIntegration")
+		if terrain and terrain.has_method("get") and "map_size" in terrain:
+			map_size = terrain.map_size
+		else:
+			# Try unified terrain
+			var unified: Node = get_node_or_null("/root/UnifiedTerrain")
+			if unified and unified.has_method("get") and "map_size" in unified:
+				map_size = unified.map_size
+
+	# Account for building footprint - ensure entire building fits
+	var half_x: float = size.x * 0.5
+	var half_z: float = size.y * 0.5
+	var margin: float = 2.0  # Small margin from edge
+
+	var min_bound: float = margin + maxf(half_x, half_z)
+	var max_bound: float = map_size - margin - maxf(half_x, half_z)
+
+	if center.x < min_bound or center.x > max_bound or center.z < min_bound or center.z > max_bound:
+		return {
+			"valid": false,
+			"error": PlacementError.OUT_OF_BOUNDS,
+			"message": "Outside playable area (%.0f, %.0f) - map is %.0fm" % [center.x, center.z, map_size]
+		}
+
+	return {"valid": true, "error": PlacementError.NONE, "message": ""}
+
+
+func _check_firebase_zone(center: Vector3, building_type: int) -> Dictionary:
+	"""Check if building requires firebase zone and if position is within one.
+
+	Building placement rules:
+	- Field Defense (can_place_anywhere=true): Placeable anywhere (sandbags, wire, claymores)
+	- TOC (is_hq_building=true, can_place_anywhere=true): Placeable anywhere, creates firebase zone
+	- Firebase Defense (can_place_anywhere=false): Requires being within TOC influence zone
+	"""
+	# No building type specified - skip check
+	if building_type < 0:
+		return {"valid": true, "error": PlacementError.NONE, "message": ""}
+
+	# Get building data to check placement rules
+	var building_data: BuildingDataClass = BuildingDataClass.get_building_data(building_type)
+	if not building_data:
+		return {"valid": true, "error": PlacementError.NONE, "message": ""}
+
+	# Buildings that can_place_anywhere don't need firebase zone
+	# This includes: Field defenses (sandbags, wire, claymores) AND TOC itself
+	if building_data.can_place_anywhere:
+		return {"valid": true, "error": PlacementError.NONE, "message": ""}
+
+	# Firebase Defense buildings require being within a TOC influence zone
+	# Check all active firebases for influence coverage
+	var firebases: Array[Node] = []
+	for node in get_tree().get_nodes_in_group("firebases"):
+		if is_instance_valid(node):
+			firebases.append(node)
+
+	# Check if position is within any firebase influence zone
+	for firebase in firebases:
+		if firebase.has_method("is_position_in_influence"):
+			if firebase.is_position_in_influence(center):
+				return {"valid": true, "error": PlacementError.NONE, "message": ""}
+
+	# Not within any firebase zone - placement invalid for Firebase Defense buildings
+	return {
+		"valid": false,
+		"error": PlacementError.OUTSIDE_FIREBASE,
+		"message": "Requires TOC - build a TOC first to establish firebase zone"
+	}
+
+
 func get_placement_error_string(error: PlacementError) -> String:
 	"""Get human-readable error message for placement error"""
 	match error:
@@ -1376,5 +1592,148 @@ func get_placement_error_string(error: PlacementError) -> String:
 			return "Cannot build in water"
 		PlacementError.INSUFFICIENT_SUPPLY:
 			return "Insufficient supply"
+		PlacementError.OUT_OF_BOUNDS:
+			return "Outside playable area"
+		PlacementError.OUTSIDE_FIREBASE:
+			return "Requires TOC - build a TOC first"
+		PlacementError.INVALID_BRIDGE_SPAN:
+			return "Bridge must span water or ravine"
 		_:
 			return "Invalid placement"
+
+
+## =============================================================================
+## BRIDGE PLACEMENT VALIDATION
+## =============================================================================
+
+func validate_bridge_placement(center: Vector3, footprint: Vector2, rotation_y: float) -> Dictionary:
+	"""Validate that bridge placement spans water or ravine.
+
+	Bridges must be placed so that:
+	- The middle of the span is over water OR significantly lower terrain (ravine)
+	- The endpoints are on higher ground (not in water)
+
+	Returns: {"valid": bool, "message": String, "span_start": Vector3, "span_end": Vector3}
+	"""
+	var terrain: Node = _get_terrain()
+	if not terrain:
+		return {"valid": false, "message": "No terrain system available", "span_start": Vector3.ZERO, "span_end": Vector3.ZERO}
+
+	# Calculate bridge endpoints based on rotation
+	# Bridge spans along its length (footprint.y = 14m for modular bridge)
+	var half_length: float = footprint.y * 0.5
+	var cos_r: float = cos(rotation_y)
+	var sin_r: float = sin(rotation_y)
+
+	# Direction vector along bridge span
+	var span_dir := Vector3(sin_r, 0.0, cos_r)
+
+	var span_start: Vector3 = center - span_dir * half_length
+	var span_end: Vector3 = center + span_dir * half_length
+	var span_middle: Vector3 = center
+
+	# Sample terrain heights at start, middle, end
+	var height_start: float = 0.0
+	var height_middle: float = 0.0
+	var height_end: float = 0.0
+
+	if terrain.has_method("get_height_at"):
+		height_start = terrain.get_height_at(span_start)
+		height_middle = terrain.get_height_at(span_middle)
+		height_end = terrain.get_height_at(span_end)
+
+	# Check for water at endpoints (invalid - bridge needs solid ground at ends)
+	var water_level: float = 0.0
+	if terrain.has_method("get") and "water_level" in terrain:
+		water_level = terrain.water_level
+
+	var start_in_water: bool = height_start < water_level - 0.3
+	var end_in_water: bool = height_end < water_level - 0.3
+	var middle_is_water: bool = height_middle < water_level + 0.5
+
+	if start_in_water:
+		return {
+			"valid": false,
+			"message": "Bridge start point is in water",
+			"span_start": span_start,
+			"span_end": span_end
+		}
+
+	if end_in_water:
+		return {
+			"valid": false,
+			"message": "Bridge end point is in water",
+			"span_start": span_start,
+			"span_end": span_end
+		}
+
+	# Check if middle is valid span point (water or ravine)
+	# Ravine threshold: middle should be at least 2m lower than average of endpoints
+	var endpoint_avg: float = (height_start + height_end) * 0.5
+	var height_diff: float = endpoint_avg - height_middle
+	var is_ravine: bool = height_diff >= 2.0
+
+	if not middle_is_water and not is_ravine:
+		return {
+			"valid": false,
+			"message": "Bridge must span water or ravine (middle %.1fm lower needed)" % (2.0 - height_diff),
+			"span_start": span_start,
+			"span_end": span_end
+		}
+
+	# Additional check: endpoints should be at roughly similar heights (< 3m difference)
+	var endpoint_diff: float = absf(height_start - height_end)
+	if endpoint_diff > 3.0:
+		return {
+			"valid": false,
+			"message": "Bridge endpoints too uneven (%.1fm difference)" % endpoint_diff,
+			"span_start": span_start,
+			"span_end": span_end
+		}
+
+	# Valid placement
+	var span_type: String = "water" if middle_is_water else "ravine"
+	return {
+		"valid": true,
+		"message": "Valid bridge placement spanning %s" % span_type,
+		"span_start": span_start,
+		"span_end": span_end,
+		"span_type": span_type,
+		"height_diff": height_diff
+	}
+
+
+## =============================================================================
+## REAL-TIME VALIDATION CACHE (For placement preview)
+## =============================================================================
+
+## Cache for validate_placement results (cleared each frame)
+var _validation_cache: Dictionary = {}
+var _validation_cache_frame: int = -1
+
+
+func validate_placement_real_time(center: Vector3, footprint_size: Vector2, building_type: int = -1, rotation_y: float = 0.0) -> Dictionary:
+	"""Optimized validation for real-time ghost preview updates.
+	Caches results per-frame to avoid redundant terrain/overlap checks during cursor movement."""
+	# Clear cache on new frame
+	var current_frame: int = Engine.get_process_frames()
+	if current_frame != _validation_cache_frame:
+		_validation_cache.clear()
+		_validation_cache_frame = current_frame
+
+	# Create cache key (quantized to 0.5m grid for cache efficiency)
+	# Include rotation in key for bridges (quantized to 15 degrees)
+	var rot_key: int = int(rotation_y * 12.0 / TAU) if building_type == BuildingDataClass.BuildingType.MODULAR_BRIDGE else 0
+	var key := "%d_%d_%d_%d" % [int(center.x * 2), int(center.z * 2), building_type, rot_key]
+
+	# Return cached result if available
+	if _validation_cache.has(key):
+		return _validation_cache[key]
+
+	# Perform actual validation
+	var result := validate_placement(center, footprint_size, building_type, rotation_y)
+
+	# Cache the result
+	_validation_cache[key] = result
+
+	return result

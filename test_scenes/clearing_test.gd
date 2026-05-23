@@ -1,33 +1,21 @@
 extends Node3D
-## Clearing Test Scene - Tests worker auto-assignment to clear jobs
+## Battle Scene - Main RTS gameplay scene
 ##
-## Uses 2D billboard trees from BillboardVegetation system
-## RTS camera controls via TestSceneBase
+## Uses production systems:
+## - BattleHUD for all UI/input handling
+## - PlacementController for building placement
+## - SelectionManager for unit selection
+## - JobSystem for job creation/management
 ##
-## Rise to Ruins style: Paint clear areas, workers auto-go do them
-##
-## Controls:
-## - WASD: Pan camera
-## - Mouse wheel: Zoom
-## - Middle mouse drag: Rotate
-## - Left-click + drag: Paint clear area (default mode)
-## - B: Open build menu (RTS-style building selection)
-## - Right-click or ESC: Cancel placement mode
-## - E: Spawn engineer at cursor
-## - Shift+B: Spawn bulldozer at cursor
-## - X: Create crater at cursor (terrain deformation!)
-## - Z: Raise terrain at cursor
-## - R: Rotate building preview (in placement mode)
-## - Space: Toggle auto-mode
+## Input is now handled by BattleHUD (build menu, placement, paint modes)
+## This scene only handles setup and debug toggles (G=grid, T=trees, F8=reset)
 
 const TerrainTypes = preload("res://terrain/terrain_types.gd")
 const UnifiedJobClass = preload("res://firebase_system/job_system/unified_job.gd")
-const BuildingDataClass = preload("res://firebase_system/building_data.gd")
 const GridCoordsClass = preload("res://terrain/core/grid_coords.gd")
 const TerrainGridClass = preload("res://terrain/core/terrain_grid.gd")
 const TreeNodeClass = preload("res://terrain/vegetation/tree_node.gd")
-const BlueprintGhostClass = preload("res://battle_system/ui/blueprint_ghost.gd")
-const BuildMenuPopupClass = preload("res://battle_system/ui/build_menu_popup.gd")
+# BlueprintGhostClass removed - now using PlacementController via BattleHUD
 
 ## Mock heightmap for flat terrain
 class MockHeightmap:
@@ -39,47 +27,17 @@ class MockHeightmap:
 	func get_normal_world(_x: float, _z: float) -> Vector3:
 		return Vector3.UP
 
-## Command mode enum
-enum CommandMode {
-	PAINT_CLEAR,    # Default: paint clearing areas
-	PLACE_BUILDING, # Building placement mode (after selecting from menu)
-	ROAD_MODE,      # Road painting mode
-	FORT_MODE,      # Fortification line mode (trenches/wire)
-}
+## Command modes are now handled by BattleHUD's CursorModeScript
+## This scene only handles test/debug hotkeys (E, Shift+B, F8, etc.)
 
 ## State
 var camera: Camera3D
-var is_painting := false
-var paint_start: Vector3 = Vector3.INF
-var paint_current: Vector3 = Vector3.INF
-var blueprint_ghost: Node3D  # BlueprintGhost for clearing/building preview
 var hud: Label
 var workers: Array[Node3D] = []
-
-## Command mode
-var current_mode: CommandMode = CommandMode.PAINT_CLEAR
-
-## Road painting mode
-var road_points: PackedVector3Array = []
-var road_ghost: Node3D  # Separate ghost for road preview
-
-## Fortification line-painting mode (trenches, wire)
-enum FortType { NONE, TRENCH, WIRE }
-var fort_type: FortType = FortType.NONE
-var fort_line_start: Vector3 = Vector3.INF
-var fort_line_end: Vector3 = Vector3.INF
-var fort_ghost: Node3D  # Line ghost for fortification preview
-
-## Building placement system (RTS-style)
-var build_menu: BuildMenuPopupClass
-var selected_building_key: String = ""
-var selected_building_type: int = -1
-var placement_rotation: float = 0.0
-var building_ghost: Node3D  # Ghost for building placement
-var current_building_data: BuildingDataClass
+# Ghost and mode state removed - now handled by BattleHUD/PlacementController
 
 ## Supply tracking
-var current_supply: int = 500  # Starting supply for test
+var current_supply: int = 2000  # Starting supply for full firebase construction
 
 ## Note: ground collision is provided by TerrainManager chunks via create_raycast_collision()
 
@@ -104,20 +62,75 @@ var trees_visible := true
 const TREE_DENSITY := 0.02  # Trees per square meter in heavy jungle
 
 ## Vegetation chunks - cover the larger test area
-## For 90m map with 64m chunks, need 2x2 chunk coverage
-var VEG_CHUNKS: Array[Vector2i] = [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)]
+## For 320m map with 64m chunks, need 5x5 chunk coverage
+var VEG_CHUNKS: Array[Vector2i] = []
 
-## Map size for camera bounds - 40% larger for more testing space
-var MAP_SIZE := 90.0
+## Map size for camera bounds - 320m for full firebase complex
+var MAP_SIZE := 320.0
 
 ## Override billboard count for test scene (scaled for larger map)
-const TEST_BILLBOARD_COUNT := 600  # More vegetation for larger map
+const TEST_BILLBOARD_COUNT := 1200  # More vegetation for larger map
+
+
+func _reset_persistent_state() -> void:
+	"""Reset all autoloads that survive scene reloads. This ensures each run
+	starts fresh without inheriting jobs, construction sites, clearing zones,
+	or tree nodes from the previous run."""
+
+	# 1. JobSystem - clears all jobs and their visual nodes (construction sites, etc.)
+	var job_sys := get_node_or_null("/root/JobSystem")
+	if job_sys and job_sys.has_method("reset"):
+		job_sys.reset()
+
+	# 2. ClearingSystem - clears all clearing zones
+	var clearing_sys := get_node_or_null("/root/ClearingSystem")
+	if clearing_sys and clearing_sys.has_method("clear_all_zones"):
+		clearing_sys.clear_all_zones()
+
+	# 3. TreeNodeManager - clears all tree node tracking
+	var tree_mgr := get_node_or_null("/root/TreeNodeManager")
+	if tree_mgr and tree_mgr.has_method("clear_all_zones"):
+		tree_mgr.clear_all_zones()
+
+	# 4. BattleHUD's PlacementController - cancel any active placement
+	var battle_hud: Node = get_node_or_null("/root/BattleHUD")
+	if battle_hud:
+		var placement: Variant = battle_hud.get("_placement_controller")
+		if placement != null and placement is Node and placement.has_method("cancel_placement"):
+			placement.cancel_placement()
+
+	# 5. ConstructionManager - clear any tracked constructions
+	var construction_mgr := get_node_or_null("/root/ConstructionManager")
+	if construction_mgr and construction_mgr.has_method("reset"):
+		construction_mgr.reset()
+
+	# 6. TestDaemon - clear commands to prevent re-execution on scene reload
+	var test_daemon := get_node_or_null("/root/TestDaemon")
+	if test_daemon and test_daemon.has_method("reset"):
+		test_daemon.reset()
+
+	# 7. Clean up any orphaned construction sites in the scene tree
+	for site in get_tree().get_nodes_in_group("construction_sites"):
+		if is_instance_valid(site):
+			site.queue_free()
+
+	print("[ClearingTest] Reset all persistent autoload state")
 
 
 func _ready() -> void:
-	print("=== Clearing Test (Billboard Trees) ===")
-	print("Testing worker auto-assignment to clear jobs")
+	print("=== Battle Scene ===")
+	print("320m map | All input via BattleHUD")
 	print("")
+
+	# Wipe persistent autoload state before generating this run's world.
+	_reset_persistent_state()
+
+	# Build VEG_CHUNKS array for 5x5 grid (320m / 64m = 5 chunks per side)
+	var chunks_per_side: int = int(ceil(MAP_SIZE / chunk_size))
+	for cx in range(chunks_per_side):
+		for cz in range(chunks_per_side):
+			VEG_CHUNKS.append(Vector2i(cx, cz))
+	print("[ClearingTest] Generated %d vegetation chunks (%dx%d)" % [VEG_CHUNKS.size(), chunks_per_side, chunks_per_side])
 
 	# Get TerrainIntegration autoload (we may use its systems if already initialized)
 	terrain_intg = get_node_or_null("/root/TerrainIntegration")
@@ -136,11 +149,11 @@ func _ready() -> void:
 	# Use TestSceneBase for RTS camera and environment
 	# Skip global terrain - we use local terrain for fast iteration
 	var setup_result: Dictionary = TestSceneBase.setup_environment(self, {
-		"name": "Clearing Test",
+		"name": "Firebase Construction Test",
 		"size": MAP_SIZE,
 		"seed": 42,
 		"add_camera": true,
-		"camera_position": Vector3(map_center, 70, map_center + 40),  # Higher camera for hilly terrain
+		"camera_position": Vector3(map_center, 120, map_center + 80),  # Higher camera for larger 320m map
 		"skip_terrain": true,  # We'll create a small local terrain instead
 	})
 	camera = setup_result.get("camera") as Camera3D
@@ -161,22 +174,22 @@ func _ready() -> void:
 
 	_setup_vegetation()
 	_setup_3d_trees()
-	_setup_area_preview()
+	# _setup_area_preview() removed - ghosts now handled by PlacementController
 	_setup_grid_overlay()
-	_setup_build_menu()
 
 	# Create simple HUD
 	hud = TestSceneBase.make_hud(self)
 
-	# Disable SelectionManager to prevent blue box interference
-	var sel_mgr = get_node_or_null("/root/SelectionManager")
-	if sel_mgr:
-		sel_mgr.set_process_input(false)
-		print("[ClearingTest] Disabled SelectionManager input")
+	# SelectionManager is now enabled (used for unit selection in production)
 
-	# Spawn initial workers at center of map
-	_spawn_engineer(Vector3(map_center - 3, 0, map_center))
-	_spawn_bulldozer(Vector3(map_center + 3, 0, map_center))
+	# Spawn initial workers at center of map (4 engineers + 4 bulldozers for firebase construction)
+	# Arrange in two rows: engineers on one side, bulldozers on the other
+	for i in range(4):
+		var offset_x: float = (i - 1.5) * 4.0  # Spread 4m apart
+		_spawn_engineer(Vector3(map_center + offset_x, 0, map_center - 6))
+	for i in range(4):
+		var offset_x: float = (i - 1.5) * 5.0  # Spread 5m apart (bulldozers are larger)
+		_spawn_bulldozer(Vector3(map_center + offset_x, 0, map_center + 6))
 
 	# Connect to JobSystem
 	var job_system = get_node_or_null("/root/JobSystem")
@@ -191,17 +204,20 @@ func _ready() -> void:
 		clearing_system.vegetation_updated.connect(_on_clearing_vegetation_updated)
 		print("[ClearingTest] Connected to ClearingSystem.vegetation_updated for billboard clearing")
 
+	# Create initial CLEAR_TERRAIN job in the jungle for workers to test
+	# This gives workers something to do immediately without manual input
+	_create_initial_clearing_job()
+
 	print("")
-	print("Controls:")
-	print("  WASD: Pan camera | Mouse wheel: Zoom | Middle drag: Rotate")
-	print("  Left-click + drag: Paint clear area")
-	print("  B: Open build menu | R: Rotate building")
-	print("  E: Spawn engineer | Shift+B: Spawn bulldozer")
-	print("  G: Toggle grid | T: Toggle 3D trees")
-	print("  ESC/Right-click: Cancel placement")
+	print("=== Battle Scene Ready ===")
+	print("Workers: 4 Engineers + 4 Bulldozers | Supply: %d" % current_supply)
 	print("")
-	print("Terrain Deformation:")
-	print("  X: Create crater | Z: Raise terrain (mound)")
+	print("=== BUILDING PLACEMENT ===")
+	print("1. Place TOC first (B menu) - it can be placed anywhere")
+	print("2. Other buildings (bunkers, MG nests, etc.) require TOC zone")
+	print("3. An initial clearing job was created in the jungle for worker testing")
+	print("")
+	print("Controls: B=Build menu | G=Grid | T=Trees | F8=Reset")
 	print("")
 
 
@@ -222,13 +238,19 @@ func _setup_local_terrain() -> void:
 	# Configure TerrainEngine for more dynamic terrain BEFORE generating
 	var terrain_engine: Node = get_node_or_null("/root/TerrainEngine")
 	if terrain_engine:
-		# Use STEEP_MOUNTAINS preset for dramatic hills and valleys
-		terrain_engine.set_preset(terrain_engine.TerrainPreset.STEEP_MOUNTAINS)
-		# Boost settings for small maps (more variation in less space)
-		terrain_engine.set_param("ridge_blend", 0.5)
-		terrain_engine.set_param("warp_strength", 60.0)
-		terrain_engine.set_param("base_frequency", 0.006)  # Higher freq = more variation in small area
-		print("[ClearingTest] TerrainEngine configured: STEEP_MOUNTAINS preset")
+		print("[DIAG] TerrainEngine BEFORE setup: height_scale=%.1f" % terrain_engine.height_scale)
+		# Use ROLLING_HILLS preset - gentler terrain that won't spike on small maps
+		terrain_engine.set_preset(terrain_engine.TerrainPreset.ROLLING_HILLS)
+		# Conservative settings for 320m map to prevent extreme height spikes
+		terrain_engine.set_param("ridge_blend", 0.15)      # Low ridge influence
+		terrain_engine.set_param("warp_strength", 15.0)    # Moderate warping
+		terrain_engine.set_param("base_frequency", 0.003)  # Lower freq = smoother hills
+		print("[DIAG] TerrainEngine AFTER preset: height_scale=%.1f, ridge_blend=%.2f, warp=%.1f" % [
+			terrain_engine.height_scale,
+			terrain_engine.params.get("ridge_blend", -1),
+			terrain_engine.params.get("warp_strength", -1)
+		])
+		print("[ClearingTest] TerrainEngine configured: ROLLING_HILLS preset (spike-safe)")
 
 	# Create TerrainManager with small map settings
 	local_terrain = TerrainManager.new()
@@ -236,11 +258,17 @@ func _setup_local_terrain() -> void:
 	local_terrain.map_size = MAP_SIZE
 	local_terrain.chunk_size = chunk_size  # 64m chunks = 4 chunks for 128m map
 	local_terrain.cell_size = 2.0
-	local_terrain.height_scale = 60.0  # Taller hills for more dramatic terrain
+	local_terrain.height_scale = 30.0  # Moderate hills - prevents spikes on small maps
 	local_terrain.rivers_enabled = false  # No rivers for fast generation
 	local_terrain.load_distance = 3
 	local_terrain.unload_distance = 4
 	add_child(local_terrain)
+	print("[DIAG] TerrainManager created: height_scale=%.1f, map_size=%.0f, chunk_size=%.0f" % [
+		local_terrain.height_scale, local_terrain.map_size, local_terrain.chunk_size
+	])
+
+	# Register as terrain manager so TreeNodeManager can find it
+	local_terrain.add_to_group("terrain_managers")
 
 	# Set camera for chunk streaming
 	local_terrain.set_camera(camera)
@@ -288,21 +316,106 @@ func _sync_terrain_with_globals() -> void:
 				_initialize_terrain_grid(new_grid)
 
 
-## Initialize terrain grid with jungle type for testing clearing
+## Initialize terrain grid with natural sporadic jungle for realistic firebase building
+## Creates varying density: dense clusters, sparse areas, and natural clearings
 func _initialize_terrain_grid(grid) -> void:
 	if not grid or not grid.has_method("set_terrain_type"):
 		return
 
-	# Set all cells to HEAVY_JUNGLE initially (requires clearing)
-	# set_terrain_type takes world_pos: Vector3, not grid coords
+	# Use noise for natural vegetation distribution
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	noise.frequency = 0.015  # Controls cluster size (lower = larger clusters)
+	noise.seed = 42
+
+	# Secondary noise for additional variation
+	var detail_noise := FastNoiseLite.new()
+	detail_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	detail_noise.frequency = 0.05  # Higher frequency for fine detail
+	detail_noise.seed = 1337
+
 	var cell_size: float = GridCoordsClass.GAMEPLAY_CELL_SIZE
 	var cell_count: int = int(ceil(MAP_SIZE / cell_size))
+
+	var terrain_counts: Dictionary = {
+		TerrainTypes.Type.CLEAR: 0,
+		TerrainTypes.Type.GRASSLAND: 0,
+		TerrainTypes.Type.LIGHT_JUNGLE: 0,
+		TerrainTypes.Type.MEDIUM_JUNGLE: 0,
+		TerrainTypes.Type.HEAVY_JUNGLE: 0,
+	}
+
+	# Create a natural clearing in the center for the firebase LZ
+	var map_center: float = MAP_SIZE * 0.5
+	var central_clearing_radius: float = 25.0  # 25m natural clearing for initial LZ
+
 	for x in range(cell_count):
 		for z in range(cell_count):
-			var world_pos := Vector3((x + 0.5) * cell_size, 0.0, (z + 0.5) * cell_size)
-			grid.set_terrain_type(world_pos, TerrainTypes.Type.HEAVY_JUNGLE)
+			var world_x: float = (x + 0.5) * cell_size
+			var world_z: float = (z + 0.5) * cell_size
+			var world_pos := Vector3(world_x, 0.0, world_z)
 
-	print("[ClearingTest] Initialized %dx%d terrain grid with HEAVY_JUNGLE" % [cell_count, cell_count])
+			# Distance from map center for natural clearing
+			var dist_from_center: float = Vector2(world_x - map_center, world_z - map_center).length()
+
+			var terrain_type: int
+
+			# Natural clearing in center (simulates existing LZ or firebase site)
+			if dist_from_center < central_clearing_radius:
+				# Gradient from clear center to light jungle at edges
+				var clearing_factor: float = dist_from_center / central_clearing_radius
+				if clearing_factor < 0.5:
+					terrain_type = TerrainTypes.Type.CLEAR
+				elif clearing_factor < 0.75:
+					terrain_type = TerrainTypes.Type.GRASSLAND
+				else:
+					terrain_type = TerrainTypes.Type.LIGHT_JUNGLE
+			else:
+				# Natural jungle with varying density using noise
+				var primary_noise: float = noise.get_noise_2d(world_x, world_z)  # -1 to 1
+				var detail: float = detail_noise.get_noise_2d(world_x, world_z) * 0.3  # Small variation
+				var combined: float = primary_noise + detail  # -1.3 to 1.3
+
+				# Map noise to terrain types (weighted toward medium/heavy for challenging clearing)
+				if combined < -0.7:
+					# Natural clearings / grassland (rare, ~10%)
+					terrain_type = TerrainTypes.Type.GRASSLAND
+				elif combined < -0.3:
+					# Light jungle (sparse trees, ~15%)
+					terrain_type = TerrainTypes.Type.LIGHT_JUNGLE
+				elif combined < 0.3:
+					# Medium jungle (moderate density, ~35%)
+					terrain_type = TerrainTypes.Type.MEDIUM_JUNGLE
+				else:
+					# Heavy jungle (dense canopy, ~40%)
+					terrain_type = TerrainTypes.Type.HEAVY_JUNGLE
+
+			grid.set_terrain_type(world_pos, terrain_type)
+			terrain_counts[terrain_type] += 1
+
+	print("[ClearingTest] Initialized %dx%d terrain grid with natural sporadic jungle:" % [cell_count, cell_count])
+	print("  CLEAR: %d, GRASSLAND: %d, LIGHT: %d, MEDIUM: %d, HEAVY: %d" % [
+		terrain_counts[TerrainTypes.Type.CLEAR],
+		terrain_counts[TerrainTypes.Type.GRASSLAND],
+		terrain_counts[TerrainTypes.Type.LIGHT_JUNGLE],
+		terrain_counts[TerrainTypes.Type.MEDIUM_JUNGLE],
+		terrain_counts[TerrainTypes.Type.HEAVY_JUNGLE],
+	])
+	print("  Central clearing: %.0fm radius for LZ/firebase site" % central_clearing_radius)
+
+	# CRITICAL: Also mark central clearing as CLEARED for building (not just vegetation TYPE)
+	# This allows buildings to be placed without auto-creating clearing prerequisite jobs
+	if grid.has_method("mark_area_cleared"):
+		var center_pos := Vector3(map_center, 0.0, map_center)
+		grid.mark_area_cleared(center_pos, central_clearing_radius)
+		print("[ClearingTest] Marked central clearing as CLEARED stage for building")
+	else:
+		# Fallback: use ClearingSystem directly
+		var clearing_sys := get_node_or_null("/root/ClearingSystem")
+		if clearing_sys and clearing_sys.has_method("mark_area_cleared"):
+			var center_pos := Vector3(map_center, 0.0, map_center)
+			clearing_sys.mark_area_cleared(center_pos, central_clearing_radius)
+			print("[ClearingTest] Marked central clearing as CLEARED via ClearingSystem")
 
 
 func _setup_vegetation() -> void:
@@ -327,45 +440,112 @@ func _setup_vegetation() -> void:
 	billboard_vegetation.set_camera(camera)
 	billboard_vegetation.set_vegetation_manager(vegetation_manager)
 
-	# CRITICAL: Wire terrain_grid for clearing stage checks (billboard removal)
+	# Wire terrain_grid for clearing stage checks (billboard removal in cleared areas)
+	# NOTE: terrain_intg.terrain_grid is NOW the local 320m grid after _sync_terrain_with_globals()
+	# ran in _setup_local_terrain(). This ensures billboards respect cleared areas.
 	if terrain_intg and terrain_intg.terrain_grid:
 		billboard_vegetation.set_terrain_grid(terrain_intg.terrain_grid)
-		print("[ClearingTest] Wired terrain_grid to billboard_vegetation for clearing")
+		print("[ClearingTest] Wired local terrain_grid to billboard_vegetation for clearing tracking")
 
-	# CRITICAL: Set low billboard count BEFORE adding to tree (before _ready)
+	# CRITICAL: Set billboard parameters BEFORE adding to tree (before _ready)
 	billboard_vegetation.billboards_per_chunk = TEST_BILLBOARD_COUNT
-	print("[ClearingTest] Billboard count set to %d (was 4500)" % TEST_BILLBOARD_COUNT)
+	# For 320m test map: show billboards beyond 80m (where 3D trees thin out)
+	# This creates visible "jungle edge" effect during testing
+	billboard_vegetation.billboard_range_min = 80.0
+	billboard_vegetation.billboard_range_max = 500.0
+	print("[ClearingTest] Billboard config: count=%d, range=80-500m" % TEST_BILLBOARD_COUNT)
 
 	add_child(billboard_vegetation)
 
-	# Disable LOD updates - we'll manually control visibility in this test
-	# This prevents flashing when camera is at the LOD threshold distance
-	billboard_vegetation.set_process(false)
+	# LOD is now handled by VegetationLODManager (hysteresis prevents flashing)
+	# Billboard processing enabled - it will coordinate with 3D tree LOD
 
-	# Generate terrain types for all chunks covering the play area
+	# Generate terrain types for all chunks covering the play area with natural sporadic jungle
+	var veg_noise := FastNoiseLite.new()
+	veg_noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	veg_noise.frequency = 0.015
+	veg_noise.seed = 42
+
+	var veg_detail_noise := FastNoiseLite.new()
+	veg_detail_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	veg_detail_noise.frequency = 0.05
+	veg_detail_noise.seed = 1337
+
+	var map_center: float = MAP_SIZE * 0.5
+	var central_clearing_radius: float = 25.0
+
 	for chunk_coord in VEG_CHUNKS:
-		# Skip 3D tree generation - just create terrain type data directly
 		var bundles_per_side: int = int(chunk_size / vegetation_manager.bundle_meters)
 		var terrain_data := PackedByteArray()
 		terrain_data.resize(bundles_per_side * bundles_per_side)
-		terrain_data.fill(VegetationManager.TerrainType.HEAVY_JUNGLE)
+
+		var chunk_offset_x: float = chunk_coord.x * chunk_size
+		var chunk_offset_z: float = chunk_coord.y * chunk_size
+
+		# Generate natural sporadic vegetation for each bundle
+		for bz in bundles_per_side:
+			for bx in bundles_per_side:
+				var bundle_idx: int = bz * bundles_per_side + bx
+				var world_x: float = chunk_offset_x + (bx + 0.5) * vegetation_manager.bundle_meters
+				var world_z: float = chunk_offset_z + (bz + 0.5) * vegetation_manager.bundle_meters
+
+				# Distance from map center for natural clearing
+				var dist_from_center: float = Vector2(world_x - map_center, world_z - map_center).length()
+
+				var terrain_type: int
+
+				# Central clearing
+				if dist_from_center < central_clearing_radius:
+					var clearing_factor: float = dist_from_center / central_clearing_radius
+					if clearing_factor < 0.5:
+						terrain_type = VegetationManager.TerrainType.CLEAR
+					elif clearing_factor < 0.75:
+						terrain_type = VegetationManager.TerrainType.GRASSLAND
+					else:
+						terrain_type = VegetationManager.TerrainType.LIGHT_JUNGLE
+				else:
+					# Natural jungle variation using noise
+					var primary: float = veg_noise.get_noise_2d(world_x, world_z)
+					var detail: float = veg_detail_noise.get_noise_2d(world_x, world_z) * 0.3
+					var combined: float = primary + detail
+
+					if combined < -0.7:
+						terrain_type = VegetationManager.TerrainType.GRASSLAND
+					elif combined < -0.3:
+						terrain_type = VegetationManager.TerrainType.LIGHT_JUNGLE
+					elif combined < 0.3:
+						terrain_type = VegetationManager.TerrainType.MEDIUM_JUNGLE
+					else:
+						terrain_type = VegetationManager.TerrainType.HEAVY_JUNGLE
+
+				terrain_data[bundle_idx] = terrain_type
+
 		vegetation_manager._chunk_terrain[chunk_coord] = terrain_data
-		print("[ClearingTest] Created %d bundles for chunk %s (no 3D trees)" % [terrain_data.size(), chunk_coord])
 
 		# Generate billboards using terrain data
 		billboard_vegetation.generate_for_chunk(chunk_coord, heightmap_to_use, terrain_data)
 
-	# Force all billboards visible (since LOD is disabled)
+	print("[ClearingTest] Generated %d chunks with natural sporadic vegetation" % VEG_CHUNKS.size())
+
+	# Force all billboards visible and count them
+	var total_billboard_instances := 0
+	var chunks_with_billboards := 0
 	for chunk_coord in VEG_CHUNKS:
 		if billboard_vegetation._chunk_billboards.has(chunk_coord):
 			var container: Node3D = billboard_vegetation._chunk_billboards[chunk_coord]
 			if container:
 				container.visible = true
+				chunks_with_billboards += 1
+				# Count MultiMesh instances in the container
+				for child in container.get_children():
+					if child is MultiMeshInstance3D and child.multimesh:
+						total_billboard_instances += child.multimesh.instance_count
 
 	var terrain_source: String = "local TerrainManager" if local_terrain else ("TerrainIntegration" if using_real_terrain else "mock flat")
-	print("[ClearingTest] Billboard vegetation generated for %d chunks (terrain: %s)" % [
-		VEG_CHUNKS.size(), terrain_source
+	print("[ClearingTest] Billboard vegetation: %d chunks generated, %d have containers, %d total billboard instances" % [
+		VEG_CHUNKS.size(), chunks_with_billboards, total_billboard_instances
 	])
+	print("[ClearingTest] Billboard camera set: %s" % (billboard_vegetation._camera != null))
 
 
 ## Setup 3D jungle trees using ONLY light tree model
@@ -376,6 +556,13 @@ func _setup_3d_trees() -> void:
 	tree_container.name = "TreeNodes3D"
 	add_child(tree_container)
 
+	# Register tree container with VegetationLODManager for distance culling
+	var lod_manager := get_node_or_null("/root/VegetationLODManager")
+	if lod_manager:
+		lod_manager.set_camera(camera)
+		# Container will be registered after trees are added
+		print("[ClearingTest] VegetationLODManager connected")
+
 	# Spawn 3D trees across the map - use only JUNGLE_LIGHT model
 	# Density controlled by spawn multiplier based on terrain type
 	var rng := RandomNumberGenerator.new()
@@ -383,12 +570,28 @@ func _setup_3d_trees() -> void:
 
 	var tree_count := 0
 	var area := MAP_SIZE * MAP_SIZE
-	var base_target_trees := int(area * TREE_DENSITY)
+	# Reduce density for larger map to maintain performance
+	var adjusted_density: float = TREE_DENSITY * 0.6  # 60% density for 320m map
+	var base_target_trees := int(area * adjusted_density)
 
-	print("[ClearingTest] Spawning jungle trees (light model only, density by count)...")
+	print("[ClearingTest] Spawning jungle trees (light model only, natural sporadic density)...")
 
 	# Generate more positions than needed, then filter based on density multiplier
-	var max_attempts := base_target_trees * 4  # Try more positions for denser areas
+	var max_attempts := mini(base_target_trees * 4, 20000)  # Cap at 20k attempts for performance
+
+	# Use same noise as terrain for consistent vegetation distribution
+	var veg_noise := FastNoiseLite.new()
+	veg_noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	veg_noise.frequency = 0.015
+	veg_noise.seed = 42
+
+	var veg_detail_noise := FastNoiseLite.new()
+	veg_detail_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	veg_detail_noise.frequency = 0.05
+	veg_detail_noise.seed = 1337
+
+	var map_center: float = MAP_SIZE * 0.5
+	var central_clearing_radius: float = 25.0
 
 	for _i in range(max_attempts):
 		var pos := Vector3(
@@ -400,12 +603,27 @@ func _setup_3d_trees() -> void:
 		# Get terrain height
 		pos.y = _get_terrain_height(pos.x, pos.z)
 
-		# Get terrain type at position
-		var terrain_type: int = TerrainTypes.Type.HEAVY_JUNGLE  # Default
-		if terrain_intg and terrain_intg.terrain_grid:
-			terrain_type = terrain_intg.terrain_grid.get_terrain_type(pos)
+		# Check central clearing - no trees in LZ area
+		var dist_from_center: float = Vector2(pos.x - map_center, pos.z - map_center).length()
+		if dist_from_center < central_clearing_radius:
+			continue
 
-		# Skip cleared areas
+		# Get terrain type at position (use noise directly for consistency)
+		var primary: float = veg_noise.get_noise_2d(pos.x, pos.z)
+		var detail: float = veg_detail_noise.get_noise_2d(pos.x, pos.z) * 0.3
+		var combined: float = primary + detail
+
+		var terrain_type: int
+		if combined < -0.7:
+			terrain_type = TerrainTypes.Type.GRASSLAND
+		elif combined < -0.3:
+			terrain_type = TerrainTypes.Type.LIGHT_JUNGLE
+		elif combined < 0.3:
+			terrain_type = TerrainTypes.Type.MEDIUM_JUNGLE
+		else:
+			terrain_type = TerrainTypes.Type.HEAVY_JUNGLE
+
+		# Skip cleared/grassland areas
 		if terrain_type <= TerrainTypes.Type.GRASSLAND:
 			continue
 
@@ -414,13 +632,13 @@ func _setup_3d_trees() -> void:
 		var density_multiplier: float
 		match terrain_type:
 			TerrainTypes.Type.LIGHT_JUNGLE:
-				density_multiplier = 0.3   # 30% spawn chance - sparse
+				density_multiplier = 0.25   # 25% spawn chance - sparse
 			TerrainTypes.Type.MEDIUM_JUNGLE:
-				density_multiplier = 0.6   # 60% spawn chance - moderate
+				density_multiplier = 0.55   # 55% spawn chance - moderate
 			TerrainTypes.Type.HEAVY_JUNGLE:
-				density_multiplier = 1.0   # 100% spawn chance - dense
+				density_multiplier = 0.85   # 85% spawn chance - dense (not 100% for natural gaps)
 			_:
-				density_multiplier = 0.0   # No trees in cleared areas
+				density_multiplier = 0.0    # No trees in cleared areas
 
 		# Probability-based spawning for density control
 		if rng.randf() > density_multiplier:
@@ -439,7 +657,13 @@ func _setup_3d_trees() -> void:
 			tree_count += 1
 
 	tree_container.visible = trees_visible
-	print("[ClearingTest] Spawned %d light trees (density by count, T to toggle)" % tree_count)
+	print("[ClearingTest] Spawned %d light trees (natural sporadic pattern, T to toggle)" % tree_count)
+
+	# Register all trees with LOD manager for distance culling
+	# Note: lod_manager already retrieved at start of function
+	if lod_manager:
+		lod_manager.register_trees(tree_nodes)
+		print("[ClearingTest] Registered %d trees with VegetationLODManager" % tree_nodes.size())
 
 
 func _set_chunk_heavy_jungle(chunk_coord: Vector2i) -> void:
@@ -451,30 +675,7 @@ func _set_chunk_heavy_jungle(chunk_coord: Vector2i) -> void:
 		print("[ClearingTest] Set all bundles to HEAVY_JUNGLE")
 
 
-func _setup_area_preview() -> void:
-	# Main blueprint ghost for clearing/building preview
-	blueprint_ghost = BlueprintGhostClass.create_rectangle(Vector3(8, 2, 8))
-	blueprint_ghost.name = "BlueprintGhost"
-	add_child(blueprint_ghost)
-
-	# Road ghost for line-based construction
-	road_ghost = BlueprintGhostClass.create_line(4.0)
-	road_ghost.name = "RoadGhost"
-	add_child(road_ghost)
-
-	# Fortification ghost for trench/wire line painting
-	fort_ghost = BlueprintGhostClass.create_line(2.0)
-	fort_ghost.name = "FortGhost"
-	add_child(fort_ghost)
-
-	# Wire local terrain to all ghosts for terrain-conforming visuals (alpha polish)
-	if local_terrain:
-		blueprint_ghost.set_terrain(local_terrain)
-		road_ghost.set_terrain(local_terrain)
-		fort_ghost.set_terrain(local_terrain)
-		print("[ClearingTest] Blueprint ghosts wired to local terrain for conforming")
-
-	print("[ClearingTest] Blueprint ghosts created (rectangle + 2 lines)")
+# _setup_area_preview removed - ghosts now handled by PlacementController via BattleHUD
 
 
 func _setup_grid_overlay() -> void:
@@ -520,25 +721,6 @@ func _setup_grid_overlay() -> void:
 	print("[ClearingTest] Grid overlay created (G to toggle)")
 
 
-## Setup build menu popup (RTS-style building selection)
-func _setup_build_menu() -> void:
-	build_menu = BuildMenuPopupClass.new()
-	build_menu.name = "BuildMenuPopup"
-
-	# Add to CanvasLayer so it's always on top
-	var canvas := CanvasLayer.new()
-	canvas.name = "BuildMenuCanvas"
-	canvas.layer = 10
-	add_child(canvas)
-	canvas.add_child(build_menu)
-
-	# Connect signals
-	build_menu.building_selected.connect(_on_build_menu_building_selected)
-	build_menu.menu_closed.connect(_on_build_menu_closed)
-
-	print("[ClearingTest] Build menu created (B to open)")
-
-
 ## Rebuild the grid overlay mesh based on current vegetation terrain types
 ## Grid conforms to actual terrain height from TerrainManager
 func _rebuild_grid_overlay() -> void:
@@ -568,29 +750,31 @@ func _rebuild_grid_overlay() -> void:
 		var chunk_offset_x: float = chunk_coord.x * chunk_size
 		var chunk_offset_z: float = chunk_coord.y * chunk_size
 
-		# Vertical lines (along Z) - sample height at each segment
+		# Vertical lines (along Z) - use center height to avoid spikes on slopes
 		for x in range(bundles_per_side + 1):
 			var world_x: float = chunk_offset_x + x * bundle_size
 			for z in range(bundles_per_side):
 				var z0: float = chunk_offset_z + z * bundle_size
 				var z1: float = chunk_offset_z + (z + 1) * bundle_size
-				var y0: float = _get_terrain_height(world_x, z0) + height_offset
-				var y1: float = _get_terrain_height(world_x, z1) + height_offset
+				# Sample center point only - both endpoints at same height = flat line
+				var center_z: float = (z0 + z1) * 0.5
+				var center_y: float = _get_terrain_height(world_x, center_z) + height_offset
 				im.surface_set_color(line_color)
-				im.surface_add_vertex(Vector3(world_x, y0, z0))
-				im.surface_add_vertex(Vector3(world_x, y1, z1))
+				im.surface_add_vertex(Vector3(world_x, center_y, z0))
+				im.surface_add_vertex(Vector3(world_x, center_y, z1))
 
-		# Horizontal lines (along X) - sample height at each segment
+		# Horizontal lines (along X) - use center height to avoid spikes on slopes
 		for z in range(bundles_per_side + 1):
 			var world_z: float = chunk_offset_z + z * bundle_size
 			for x in range(bundles_per_side):
 				var x0: float = chunk_offset_x + x * bundle_size
 				var x1: float = chunk_offset_x + (x + 1) * bundle_size
-				var y0: float = _get_terrain_height(x0, world_z) + height_offset
-				var y1: float = _get_terrain_height(x1, world_z) + height_offset
+				# Sample center point only - both endpoints at same height = flat line
+				var center_x: float = (x0 + x1) * 0.5
+				var center_y: float = _get_terrain_height(center_x, world_z) + height_offset
 				im.surface_set_color(line_color)
-				im.surface_add_vertex(Vector3(x0, y0, world_z))
-				im.surface_add_vertex(Vector3(x1, y1, world_z))
+				im.surface_add_vertex(Vector3(x0, center_y, world_z))
+				im.surface_add_vertex(Vector3(x1, center_y, world_z))
 
 	im.surface_end()
 
@@ -642,26 +826,26 @@ func _rebuild_grid_overlay() -> void:
 					_:
 						cell_color = Color(0.5, 0.5, 0.5, 0.2)  # Gray (unknown)
 
-				# Quad corners with terrain-conforming heights
+				# Quad corners - use single center height (prevents vertical spikes on slopes)
 				var x0: float = chunk_offset_x + bx * bundle_size
 				var x1: float = chunk_offset_x + (bx + 1) * bundle_size
 				var z0: float = chunk_offset_z + bz * bundle_size
 				var z1: float = chunk_offset_z + (bz + 1) * bundle_size
 
-				var y00: float = _get_terrain_height(x0, z0) + fill_offset
-				var y10: float = _get_terrain_height(x1, z0) + fill_offset
-				var y01: float = _get_terrain_height(x0, z1) + fill_offset
-				var y11: float = _get_terrain_height(x1, z1) + fill_offset
+				# Sample center point only - all 4 corners at same height = flat horizontal quad
+				var center_x: float = (x0 + x1) * 0.5
+				var center_z: float = (z0 + z1) * 0.5
+				var center_y: float = _get_terrain_height(center_x, center_z) + fill_offset
 
-				# Two triangles for quad (terrain-conforming)
+				# Two triangles for quad (flat, not terrain-conforming to avoid vertical spikes)
 				im.surface_set_color(cell_color)
-				im.surface_add_vertex(Vector3(x0, y00, z0))
-				im.surface_add_vertex(Vector3(x1, y10, z0))
-				im.surface_add_vertex(Vector3(x1, y11, z1))
+				im.surface_add_vertex(Vector3(x0, center_y, z0))
+				im.surface_add_vertex(Vector3(x1, center_y, z0))
+				im.surface_add_vertex(Vector3(x1, center_y, z1))
 
-				im.surface_add_vertex(Vector3(x0, y00, z0))
-				im.surface_add_vertex(Vector3(x1, y11, z1))
-				im.surface_add_vertex(Vector3(x0, y01, z1))
+				im.surface_add_vertex(Vector3(x0, center_y, z0))
+				im.surface_add_vertex(Vector3(x1, center_y, z1))
+				im.surface_add_vertex(Vector3(x0, center_y, z1))
 
 	im.surface_end()
 
@@ -725,303 +909,52 @@ func _spawn_bulldozer(pos: Vector3) -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		_handle_mouse_button(mb)
+	# All standard RTS input (selection, placement, paint modes) is now handled by BattleHUD.
+	# This scene only handles TEST/DEBUG hotkeys.
+	#
+	# If BattleHUD is in a special mode (placing, paint), let it handle everything.
+	var battle_hud := get_node_or_null("/root/BattleHUD")
+	if battle_hud:
+		# Check if BattleHUD is handling something
+		if battle_hud.has_method("is_placing") and battle_hud.is_placing():
+			return  # BattleHUD handles placement input
+		if battle_hud.has_method("get_cursor_mode"):
+			var mode: int = battle_hud.get_cursor_mode()
+			if mode != 0:  # 0 = NORMAL mode
+				return  # BattleHUD handles special mode input
 
-	elif event is InputEventMouseMotion:
-		_handle_mouse_motion(event as InputEventMouseMotion)
-
-	elif event is InputEventKey:
+	# Only handle keyboard events for test hotkeys
+	if event is InputEventKey:
 		var key := event as InputEventKey
-		if key.pressed:
-			_handle_key(key)
+		if key.pressed and not key.echo:
+			_handle_test_hotkey(key)
 
 
-func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
-	var cursor_pos := _raycast_ground(event.position)
-
-	# Update building ghost position in PLACE_BUILDING mode
-	if current_mode == CommandMode.PLACE_BUILDING and building_ghost:
-		if cursor_pos != Vector3.INF:
-			building_ghost.update_position(cursor_pos)
-			building_ghost.rotation.y = placement_rotation
-			# Update validity color
-			var is_valid := _check_placement_validity(cursor_pos)
-			if is_valid:
-				building_ghost.set_placement_state(BlueprintGhostClass.PlacementState.VALID)
-			else:
-				building_ghost.set_placement_state(BlueprintGhostClass.PlacementState.INVALID)
-
-	# Update clearing preview during painting
-	elif is_painting and current_mode == CommandMode.PAINT_CLEAR:
-		paint_current = cursor_pos
-		_update_area_preview()
-
-	# Update road preview in road mode
-	elif current_mode == CommandMode.ROAD_MODE:
-		if cursor_pos != Vector3.INF and road_ghost:
-			var preview_points := road_points.duplicate()
-			preview_points.append(cursor_pos)
-			if preview_points.size() >= 2:
-				road_ghost.set_line_points(preview_points)
-
-	# Update fortification preview during drag
-	elif current_mode == CommandMode.FORT_MODE and fort_line_start != Vector3.INF:
-		fort_line_end = cursor_pos
-		if fort_line_end != Vector3.INF and fort_ghost:
-			var preview_points := PackedVector3Array()
-			preview_points.append(fort_line_start)
-			preview_points.append(fort_line_end)
-			fort_ghost.set_line_points(preview_points)
-			# Color based on length
-			var line_length := Vector2(fort_line_end.x - fort_line_start.x, fort_line_end.z - fort_line_start.z).length()
-			if line_length >= 2.0:
-				fort_ghost.set_placement_state(BlueprintGhostClass.PlacementState.VALID)
-			else:
-				fort_ghost.set_placement_state(BlueprintGhostClass.PlacementState.WARNING)
-
-
-func _handle_mouse_button(event: InputEventMouseButton) -> void:
-	var cursor_pos := _raycast_ground(event.position)
-
-	# Handle building placement mode
-	if current_mode == CommandMode.PLACE_BUILDING:
-		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			if cursor_pos != Vector3.INF:
-				_try_place_building(cursor_pos)
-			return
-		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			_cancel_placement()
-			return
-
-	# Handle road mode clicks
-	if current_mode == CommandMode.ROAD_MODE:
-		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			if cursor_pos != Vector3.INF:
-				_handle_road_click(cursor_pos, false)
-			return
-		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			_handle_road_click(Vector3.ZERO, true)  # Finish road
-			return
-
-	# Handle fortification line-painting mode (trenches, wire)
-	if current_mode == CommandMode.FORT_MODE:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				# Start line painting
-				if cursor_pos != Vector3.INF:
-					fort_line_start = cursor_pos
-					fort_line_end = cursor_pos
-					if fort_ghost:
-						fort_ghost.show_ghost()
-			else:
-				# Release - create the job with rotation
-				if fort_line_start != Vector3.INF and fort_line_end != Vector3.INF:
-					var line_vec := fort_line_end - fort_line_start
-					var line_length := Vector2(line_vec.x, line_vec.z).length()
-					if line_length >= 2.0:  # Minimum length
-						var center := (fort_line_start + fort_line_end) * 0.5
-						var rotation_y := atan2(line_vec.x, line_vec.z)
-						_create_fortification_job(center, line_length, rotation_y)
-				fort_line_start = Vector3.INF
-				fort_line_end = Vector3.INF
-				if fort_ghost:
-					fort_ghost.hide_ghost()
-			return
-		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			# Cancel fortification mode
-			_exit_fort_mode()
-			return
-
-	# Default: clearing paint mode
-	if event.button_index == MOUSE_BUTTON_LEFT:
-		if event.pressed:
-			paint_start = cursor_pos
-			paint_current = paint_start
-			is_painting = true
-			if blueprint_ghost:
-				blueprint_ghost.show_ghost()
-		else:
-			if is_painting and paint_start != Vector3.INF:
-				_create_clear_job(paint_start, paint_current)
-			is_painting = false
-			if blueprint_ghost:
-				blueprint_ghost.hide_ghost()
-
-	elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		is_painting = false
-		if blueprint_ghost:
-			blueprint_ghost.hide_ghost()
-
-		# Try to cancel construction at click position
-		_try_cancel_construction(event.position)
-
-
-func _handle_key(event: InputEventKey) -> void:
-	var cursor_pos := _raycast_ground(get_viewport().get_mouse_position())
-
+## Handle debug-only hotkeys - all gameplay input is handled by BattleHUD
+## These are development aids, not gameplay features
+func _handle_test_hotkey(event: InputEventKey) -> void:
 	match event.keycode:
-		KEY_ESCAPE:
-			# Cancel any active mode
-			if build_menu and build_menu.visible:
-				build_menu.close_menu()
-			elif current_mode != CommandMode.PAINT_CLEAR:
-				_cancel_placement()
-
-		KEY_B:
-			if event.shift_pressed:
-				# Shift+B: Spawn bulldozer
-				if cursor_pos != Vector3.INF:
-					_spawn_bulldozer(cursor_pos)
-			else:
-				# B: Open build menu
-				if build_menu:
-					if build_menu.visible:
-						build_menu.close_menu()
-					else:
-						build_menu.open_menu(current_supply)
-
-		KEY_E:
-			if cursor_pos != Vector3.INF:
-				if event.shift_pressed:
-					# Spawn 5 engineers in a spread
-					for i in 5:
-						var offset := Vector3(randf_range(-5, 5), 0, randf_range(-5, 5))
-						_spawn_engineer(cursor_pos + offset)
-					print("[ClearingTest] Spawned 5 engineers")
-				else:
-					_spawn_engineer(cursor_pos)
-
-		KEY_R:
-			# Rotate building preview
-			if current_mode == CommandMode.PLACE_BUILDING:
-				placement_rotation += PI / 2.0
-				if placement_rotation >= TAU:
-					placement_rotation = 0.0
-				print("[ClearingTest] Rotation: %.0f deg" % rad_to_deg(placement_rotation))
-
-		KEY_G:
+		KEY_G:  # Toggle grid overlay (debug visualization)
 			grid_visible = not grid_visible
 			if grid_overlay:
 				grid_overlay.visible = grid_visible
-			print("[ClearingTest] Grid overlay: %s" % ("ON" if grid_visible else "OFF"))
+			print("[DEBUG] Grid overlay: %s" % ("ON" if grid_visible else "OFF"))
 
-		KEY_T:
+		KEY_T:  # Toggle 3D trees (debug visualization)
 			trees_visible = not trees_visible
 			if tree_container:
 				tree_container.visible = trees_visible
-			print("[ClearingTest] 3D Trees: %s" % ("ON" if trees_visible else "OFF"))
+			print("[DEBUG] 3D Trees: %s" % ("ON" if trees_visible else "OFF"))
 
-		KEY_F:  # Flatten area at cursor
-			if cursor_pos != Vector3.INF:
-				_create_flatten_job(cursor_pos)
-
-		KEY_Y:  # Toggle trench line-painting mode
-			_toggle_fort_mode(FortType.TRENCH)
-
-		KEY_W:  # Toggle wire line-painting mode
-			_toggle_fort_mode(FortType.WIRE)
-
-		KEY_X:  # Create crater at cursor (terrain deformation!)
-			if cursor_pos != Vector3.INF:
-				_create_crater(cursor_pos)
-
-		KEY_Z:  # Raise terrain at cursor
-			if cursor_pos != Vector3.INF:
-				_raise_terrain(cursor_pos)
+		KEY_F8:  # Reset scene (debug)
+			print("[DEBUG] Resetting scene...")
+			get_tree().reload_current_scene()
 
 
-func _raycast_ground(screen_pos: Vector2) -> Vector3:
-	if not camera:
-		return Vector3.INF
-
-	var ray_origin: Vector3 = camera.project_ray_origin(screen_pos)
-	var ray_dir: Vector3 = camera.project_ray_normal(screen_pos)
-
-	var space: PhysicsDirectSpaceState3D = get_viewport().get_world_3d().direct_space_state
-	var query := PhysicsRayQueryParameters3D.create(
-		ray_origin, ray_origin + ray_dir * 500.0
-	)
-	query.collision_mask = 1
-
-	var result: Dictionary = space.intersect_ray(query)
-	if not result.is_empty() and result.has("position"):
-		return result["position"] as Vector3
-
-	if ray_dir.y != 0:
-		var t: float = -ray_origin.y / ray_dir.y
-		if t > 0:
-			return ray_origin + ray_dir * t
-
-	return Vector3.INF
+## NOTE: Construction cancellation via right-click is now handled by BattleHUD
 
 
-func _try_cancel_construction(screen_pos: Vector2) -> void:
-	"""Try to cancel a construction job at the clicked position"""
-	var cursor_pos := _raycast_ground(screen_pos)
-	if cursor_pos == Vector3.INF:
-		return
-
-	# Find construction sites near the click
-	var closest_site: Node3D = null
-	var closest_dist: float = 5.0  # Max click distance in meters
-
-	for site in get_tree().get_nodes_in_group("construction_sites"):
-		if not is_instance_valid(site):
-			continue
-		var dist: float = site.global_position.distance_to(cursor_pos)
-		if dist < closest_dist:
-			closest_dist = dist
-			closest_site = site
-
-	if closest_site:
-		# Find and cancel the associated job
-		var job_system = get_node_or_null("/root/JobSystem")
-		if job_system:
-			# Search for the job that owns this construction site
-			var cancelled := false
-			for job in job_system.jobs.values():
-				if not is_instance_valid(job):
-					continue
-				var job_node: Node = job.metadata.get("job_node")
-				if job_node == closest_site:
-					job_system.cancel_job(job)
-					print("[ClearingTest] Cancelled construction job #%d via right-click" % job.job_id)
-					cancelled = true
-					break
-
-			if not cancelled:
-				# Fallback: directly cancel the site
-				if closest_site.has_method("cancel"):
-					closest_site.cancel()
-					print("[ClearingTest] Cancelled construction site directly (no job found)")
-
-
-func _update_area_preview() -> void:
-	if paint_start == Vector3.INF or paint_current == Vector3.INF:
-		return
-
-	var min_x: float = minf(paint_start.x, paint_current.x)
-	var max_x: float = maxf(paint_start.x, paint_current.x)
-	var min_z: float = minf(paint_start.z, paint_current.z)
-	var max_z: float = maxf(paint_start.z, paint_current.z)
-
-	var size_x: float = maxf(max_x - min_x, 1.0)
-	var size_z: float = maxf(max_z - min_z, 1.0)
-
-	# Update blueprint ghost size and position
-	if blueprint_ghost:
-		var center := Vector3((min_x + max_x) * 0.5, 0.0, (min_z + max_z) * 0.5)
-		blueprint_ghost.set_size(Vector3(size_x, 2.0, size_z))
-		blueprint_ghost.update_position(center)
-
-		# Check if placement is valid (size check)
-		if size_x >= 2.0 and size_z >= 2.0:
-			blueprint_ghost.set_placement_state(BlueprintGhostClass.PlacementState.VALID)
-		else:
-			blueprint_ghost.set_placement_state(BlueprintGhostClass.PlacementState.WARNING)
-
+## NOTE: Paint area preview now handled by BattleHUD's paint mode
 
 func _create_clear_job(start: Vector3, end: Vector3) -> void:
 	# Get terrain heights at corners to fix 3D arrival check (Y=0 caused workers to never arrive)
@@ -1057,6 +990,50 @@ func _create_clear_job(start: Vector3, end: Vector3) -> void:
 		push_warning("[ClearingTest] JobSystem not found - cannot create job")
 
 
+func _create_initial_clearing_job() -> void:
+	"""Create an initial CLEAR_TERRAIN job in the jungle area for immediate worker testing.
+	   The job is placed in the jungle zone (offset from center clearing) so workers have trees to fell."""
+	var job_system = get_node_or_null("/root/JobSystem")
+	if not job_system:
+		push_warning("[ClearingTest] JobSystem not found - cannot create initial clearing job")
+		return
+
+	# Place clearing job in the jungle area (northeast of center, outside the natural clearing)
+	# Natural clearing is 25m radius at center, so place at 40m offset
+	var map_center := MAP_SIZE * 0.5
+	var job_center := Vector3(map_center + 45.0, 0.0, map_center - 45.0)
+	var job_size := Vector2(20.0, 20.0)  # 20x20m clearing job
+
+	# Get terrain height at job center
+	job_center.y = _get_terrain_height(job_center.x, job_center.z)
+
+	var job = job_system.create_job(
+		UnifiedJobClass.Type.CLEAR_TERRAIN,
+		job_center,
+		job_size
+	)
+
+	if job:
+		print("[ClearingTest] Initial CLEAR_TERRAIN job #%d created at %v (20x20m in jungle)" % [
+			job.job_id, job_center
+		])
+		print("[ClearingTest] Trees in group: %d" % get_tree().get_nodes_in_group("trees").size())
+
+		# Count trees in job bounds for debugging
+		var trees_in_job := 0
+		var bounds: AABB = job.world_bounds
+		for tree in get_tree().get_nodes_in_group("trees"):
+			if not is_instance_valid(tree):
+				continue
+			var pos: Vector3 = tree.global_position
+			if pos.x >= bounds.position.x and pos.x <= bounds.end.x:
+				if pos.z >= bounds.position.z and pos.z <= bounds.end.z:
+					trees_in_job += 1
+		print("[ClearingTest] Trees in job bounds: %d" % trees_in_job)
+	else:
+		push_warning("[ClearingTest] Failed to create initial clearing job")
+
+
 func _on_job_created(job) -> void:
 	print("[ClearingTest] JOB CREATED: #%d %s" % [job.job_id, UnifiedJobClass.get_type_name(job.job_type)])
 
@@ -1073,7 +1050,7 @@ func _on_clearing_vegetation_updated(region: Rect2i) -> void:
 	if not billboard_vegetation or not vegetation_manager:
 		return
 
-	print("[ClearingTest] Clearing detected in region %s - regenerating billboards and removing 3D trees" % region)
+	print("[ClearingTest] Clearing detected in region %s - regenerating billboards" % region)
 
 	var heightmap_to_use = _get_heightmap_or_mock()
 
@@ -1084,28 +1061,8 @@ func _on_clearing_vegetation_updated(region: Rect2i) -> void:
 	var region_max_x: float = (region.position.x + region.size.x) * cell_size
 	var region_max_z: float = (region.position.y + region.size.y) * cell_size
 
-	# Remove 3D trees in the cleared region
-	var trees_removed := 0
-	var trees_to_remove: Array[Node3D] = []
-	for tree in tree_nodes:
-		if not is_instance_valid(tree):
-			continue
-		var pos: Vector3 = tree.global_position
-		if pos.x >= region_min_x and pos.x <= region_max_x:
-			if pos.z >= region_min_z and pos.z <= region_max_z:
-				trees_to_remove.append(tree)
-
-	for tree in trees_to_remove:
-		tree_nodes.erase(tree)
-		# Animate tree falling before removing
-		if tree.has_method("_start_clear"):
-			tree._start_clear()
-		else:
-			tree.queue_free()
-		trees_removed += 1
-
-	if trees_removed > 0:
-		print("[ClearingTest] Removed %d 3D trees in cleared area" % trees_removed)
+	# NOTE: 3D trees are felled individually by workers (WorkerController._process_chopping),
+	# so they are not batch-removed here. This only regenerates distant billboards.
 
 	# Update terrain data and regenerate billboards for affected chunks
 	var bundle_size: float = vegetation_manager.bundle_meters
@@ -1157,9 +1114,6 @@ func _on_clearing_vegetation_updated(region: Rect2i) -> void:
 	if billboards_cleared > 0:
 		print("[ClearingTest] Cleared %d billboard bundles" % billboards_cleared)
 
-	# Force visibility
-	_force_billboard_visibility()
-
 	# Rebuild grid overlay
 	_rebuild_grid_overlay()
 
@@ -1203,30 +1157,14 @@ func _clear_vegetation_in_rect(min_corner: Vector3, max_corner: Vector3) -> void
 			total_cleared += cleared
 
 	if total_cleared > 0:
-		# Force visibility
-		_force_billboard_visibility()
-
 		# Rebuild grid overlay to show cleared areas
 		_rebuild_grid_overlay()
 
 		print("[ClearingTest] Cleared %d vegetation bundles" % total_cleared)
 
 
-func _force_billboard_visibility() -> void:
-	# Force billboards visible regardless of LOD distance
-	if not billboard_vegetation:
-		return
-	for chunk_coord in VEG_CHUNKS:
-		if billboard_vegetation._chunk_billboards.has(chunk_coord):
-			var container: Node3D = billboard_vegetation._chunk_billboards[chunk_coord]
-			if is_instance_valid(container):
-				container.visible = true
-
-
 func _process(_delta: float) -> void:
-	# Force billboards visible (override LOD)
-	_force_billboard_visibility()
-
+	# LOD is now handled automatically by VegetationLODManager
 	_update_hud()
 
 
@@ -1236,30 +1174,35 @@ func _update_hud() -> void:
 
 	var job_system = get_node_or_null("/root/JobSystem")
 
-	var text := "=== Clearing Test (RTS Building) ===\n"
-	text += "Workers: %d | Supply: %d\n" % [workers.size(), current_supply]
+	var text := "=== Firebase Construction (320m) ===\n"
+	text += "Supply: %d | Map: %.0fm x %.0fm\n" % [current_supply, MAP_SIZE, MAP_SIZE]
 
 	var engineers := 0
 	var bulldozers := 0
+	var idle_workers := 0
 	for w in workers:
 		if w.data and w.data.is_vehicle:
 			bulldozers += 1
 		else:
 			engineers += 1
-	text += "  Engineers: %d, Bulldozers: %d\n" % [engineers, bulldozers]
+		# Check if worker is idle
+		if w.has_method("get_worker_controller"):
+			var wc: Node = w.get_worker_controller()
+			if wc and wc.has_method("is_idle") and wc.is_idle():
+				idle_workers += 1
+	text += "Workers: %d Eng + %d Dozer (%d idle)\n" % [engineers, bulldozers, idle_workers]
 
-	# Show current mode
-	var mode_str: String
-	match current_mode:
-		CommandMode.PAINT_CLEAR:
-			mode_str = "PAINT CLEAR"
-		CommandMode.PLACE_BUILDING:
-			mode_str = "PLACE: %s" % selected_building_key
-		CommandMode.ROAD_MODE:
-			mode_str = "ROAD (%d pts)" % road_points.size()
-		CommandMode.FORT_MODE:
-			var fort_str := "TRENCH" if fort_type == FortType.TRENCH else "WIRE"
-			mode_str = "%s LINE" % fort_str
+	# Show current mode from BattleHUD
+	var battle_hud := get_node_or_null("/root/BattleHUD")
+	var mode_str: String = "NORMAL"
+	if battle_hud and battle_hud.has_method("get_cursor_mode"):
+		var mode: int = battle_hud.get_cursor_mode()
+		match mode:
+			0: mode_str = "NORMAL"
+			1: mode_str = "PLACING"
+			2: mode_str = "PAINT CLEAR"
+			3: mode_str = "PAINT ROAD"
+			_: mode_str = "MODE %d" % mode
 	text += "\nMode: %s\n" % mode_str
 
 	# Show job counts and queue
@@ -1295,8 +1238,12 @@ func _update_hud() -> void:
 	var cleared := _count_clear_bundles()
 	var total := _count_total_bundles()
 	text += "\nVegetation: %d/%d bundles cleared\n" % [cleared, total]
+	var standing_trees := 0
+	for t in tree_nodes:
+		if is_instance_valid(t):
+			standing_trees += 1
 	text += "3D Trees: %d (%s) | Grid: %s\n" % [
-		tree_nodes.size(),
+		standing_trees,
 		"visible" if trees_visible else "hidden",
 		"ON" if grid_visible else "OFF"
 	]
@@ -1314,16 +1261,10 @@ func _update_hud() -> void:
 
 		text += "  %s: %s\n" % [worker.name, status]
 
-	if is_painting:
-		var size_x: float = absf(paint_current.x - paint_start.x)
-		var size_z: float = absf(paint_current.z - paint_start.z)
-		text += "\nPainting: %.1f x %.1f m" % [size_x, size_z]
-
 	# Controls reminder
 	text += "\n\nControls:"
 	text += "\n  B=Build menu | R=Rotate | ESC=Cancel"
-	text += "\n  E=Engineer | Shift+B=Bulldozer"
-	text += "\n  X=Crater | Z=Mound | G=Grid | T=Trees"
+	text += "\n  G=Grid | T=Trees | F8=Reset"
 
 	hud.text = text
 
@@ -1374,188 +1315,6 @@ func _get_heightmap_or_mock():
 
 
 ## =============================================================================
-## BUILD MENU INTEGRATION (RTS-STYLE)
-## =============================================================================
-
-func _on_build_menu_building_selected(building_key: String, placement_mode: int) -> void:
-	"""Handle building selection from build menu"""
-	print("[ClearingTest] Build menu selected: %s (mode %d)" % [building_key, placement_mode])
-
-	# Get building entry from menu
-	var entry = build_menu.get_building(building_key)
-	if not entry:
-		print("[ClearingTest] Unknown building: %s" % building_key)
-		return
-
-	# Check if we can afford it
-	if entry.supply_cost > current_supply:
-		print("[ClearingTest] Cannot afford %s (need %d, have %d)" % [
-			entry.display_name, entry.supply_cost, current_supply])
-		return
-
-	# Store selection
-	selected_building_key = building_key
-	selected_building_type = entry.building_type
-	placement_rotation = 0.0
-
-	# Get building data for footprint size
-	if entry.building_type >= 0:
-		current_building_data = BuildingDataClass.get_building_data(entry.building_type)
-	else:
-		current_building_data = null
-
-	# Create ghost preview
-	_create_building_ghost(entry)
-
-	# Enter placement mode
-	current_mode = CommandMode.PLACE_BUILDING
-	print("[ClearingTest] Placement mode: %s (cost: %d)" % [entry.display_name, entry.supply_cost])
-
-
-func _on_build_menu_closed() -> void:
-	"""Handle build menu being closed without selection"""
-	print("[ClearingTest] Build menu closed")
-
-
-func _create_building_ghost(entry) -> void:
-	"""Create ghost preview for building placement"""
-	# Clear any existing ghost
-	if building_ghost:
-		building_ghost.queue_free()
-		building_ghost = null
-
-	# Get footprint size
-	var footprint_size := Vector2(4.0, 4.0)
-	var building_height := 2.0
-
-	if current_building_data:
-		footprint_size = current_building_data.footprint_size
-		building_height = current_building_data.height
-
-	# Create ghost based on placement mode
-	match entry.placement_mode:
-		BuildMenuPopupClass.PlacementMode.SINGLE:
-			building_ghost = BlueprintGhostClass.create_rectangle(
-				Vector3(footprint_size.x, building_height, footprint_size.y))
-
-		BuildMenuPopupClass.PlacementMode.PAINTABLE:
-			# Line-based (sandbags, trenches)
-			building_ghost = BlueprintGhostClass.create_line(2.0)
-
-		BuildMenuPopupClass.PlacementMode.PAINTABLE_SPACED:
-			# Spaced placement (wire, tank traps)
-			building_ghost = BlueprintGhostClass.create_line(entry.spacing if entry.spacing > 0 else 2.0)
-
-	if building_ghost:
-		building_ghost.name = "BuildingGhost"
-		add_child(building_ghost)
-		# Wire local terrain for terrain-conforming ghost (alpha polish)
-		if local_terrain:
-			building_ghost.set_terrain(local_terrain)
-		# Set initial position to current mouse location to avoid interpolation lag
-		var initial_pos := _raycast_ground(get_viewport().get_mouse_position())
-		if initial_pos != Vector3.INF:
-			building_ghost.global_position = initial_pos
-			building_ghost.update_position(initial_pos)
-		building_ghost.show_ghost()
-
-
-func _check_placement_validity(position: Vector3) -> bool:
-	"""Check if building can be placed at position"""
-	if not current_building_data:
-		return true  # No data = no restrictions
-
-	var job_system = get_node_or_null("/root/JobSystem")
-	if not job_system:
-		return true
-
-	# Use JobSystem's placement validation
-	var footprint_size := current_building_data.footprint_size
-	var validation: Dictionary = job_system.validate_placement(position, footprint_size, selected_building_type)
-
-	return validation.valid
-
-
-func _try_place_building(position: Vector3) -> void:
-	"""Attempt to place building at position"""
-	if selected_building_key.is_empty():
-		return
-
-	var entry = build_menu.get_building(selected_building_key)
-	if not entry:
-		return
-
-	# Check affordability again (in case supply changed)
-	if entry.supply_cost > current_supply:
-		print("[ClearingTest] Cannot afford %s (need %d, have %d)" % [
-			entry.display_name, entry.supply_cost, current_supply])
-		return
-
-	# Check placement validity
-	if not _check_placement_validity(position):
-		print("[ClearingTest] Invalid placement location")
-		return
-
-	# Create build job via JobSystem (handles prerequisites and supply)
-	var job_system = get_node_or_null("/root/JobSystem")
-	if not job_system:
-		push_warning("[ClearingTest] JobSystem not found")
-		return
-
-	var footprint_size := Vector2(4.0, 4.0)
-	if current_building_data:
-		footprint_size = current_building_data.footprint_size
-
-	# Use create_build_job which handles supply deduction and prerequisites
-	var job = job_system.create_build_job(
-		position,
-		selected_building_type,
-		placement_rotation,
-		footprint_size,
-		true  # skip_validation since we already checked
-	)
-
-	if job:
-		# Deduct supply locally (JobSystem also deducts from firebase if present)
-		# For test scene without firebase, we track supply manually
-		current_supply -= entry.supply_cost
-		print("[ClearingTest] Placed %s (job #%d), supply: %d remaining" % [
-			entry.display_name, job.job_id, current_supply])
-
-		# Update build menu supply display
-		if build_menu:
-			build_menu.set_supply(current_supply)
-	else:
-		print("[ClearingTest] Failed to create build job for %s" % entry.display_name)
-
-	# Stay in placement mode for quick successive placements
-	# (User can press ESC or right-click to exit)
-
-
-func _cancel_placement() -> void:
-	"""Cancel building placement mode"""
-	if building_ghost:
-		building_ghost.queue_free()
-		building_ghost = null
-
-	selected_building_key = ""
-	selected_building_type = -1
-	current_building_data = null
-	current_mode = CommandMode.PAINT_CLEAR
-
-	# Also cancel fortification mode if active
-	_exit_fort_mode()
-
-	# Cancel road mode if active
-	if current_mode == CommandMode.ROAD_MODE:
-		road_points.clear()
-		if road_ghost:
-			road_ghost.hide_ghost()
-
-	print("[ClearingTest] Placement cancelled, back to clear mode")
-
-
-## =============================================================================
 ## ADDITIONAL JOB TYPES
 ## =============================================================================
 
@@ -1572,133 +1331,10 @@ func _create_flatten_job(center: Vector3) -> void:
 		Vector2(12.0, 12.0)
 	)
 	if job:
-		print("[ClearingTest] Flatten job created: #%d at %v" % [job.job_id, center])
+		print("[ClearingTest] Flatten job created: #%d at %s" % [job.job_id, center])
 
 
-## Toggle road painting mode
-func _toggle_road_mode() -> void:
-	if current_mode == CommandMode.ROAD_MODE:
-		# Exit road mode
-		road_points.clear()
-		current_mode = CommandMode.PAINT_CLEAR
-		if road_ghost:
-			road_ghost.hide_ghost()
-		print("[ClearingTest] Road mode: OFF")
-	else:
-		# Enter road mode
-		_cancel_placement()
-		current_mode = CommandMode.ROAD_MODE
-		road_points.clear()
-		if road_ghost:
-			road_ghost.show_ghost()
-		print("[ClearingTest] Road mode: ON (click points, right-click to finish)")
-
-
-## Handle road mode clicks
-func _handle_road_click(pos: Vector3, finish: bool) -> void:
-	if current_mode != CommandMode.ROAD_MODE:
-		return
-
-	if finish:
-		# Finish road - create job
-		if road_points.size() >= 2:
-			_create_road_job(road_points)
-		road_points.clear()
-		current_mode = CommandMode.PAINT_CLEAR
-		if road_ghost:
-			road_ghost.hide_ghost()
-		print("[ClearingTest] Road mode: OFF")
-	else:
-		# Add point
-		road_points.append(pos)
-		print("[ClearingTest] Road point %d: %v" % [road_points.size(), pos])
-
-		# Update road ghost with current points
-		if road_ghost and road_ghost.has_method("set_line_points"):
-			road_ghost.set_line_points(road_points)
-			road_ghost.set_placement_state(BlueprintGhostClass.PlacementState.VALID if road_points.size() >= 2 else BlueprintGhostClass.PlacementState.WARNING)
-
-
-## Create a road job from the collected points
-func _create_road_job(points: PackedVector3Array) -> void:
-	var job_system = get_node_or_null("/root/JobSystem")
-	if not job_system:
-		push_warning("[ClearingTest] JobSystem not found")
-		return
-
-	if not job_system.has_method("create_road_job"):
-		push_warning("[ClearingTest] JobSystem missing create_road_job method")
-		return
-
-	var job = job_system.create_road_job(points, 4.0)  # 4m wide road
-	if job:
-		print("[ClearingTest] Road job created: #%d with %d points" % [job.job_id, points.size()])
-
-
-## Toggle fortification line-painting mode
-func _toggle_fort_mode(type: FortType) -> void:
-	# If already in this mode, exit it
-	if current_mode == CommandMode.FORT_MODE and fort_type == type:
-		_exit_fort_mode()
-		return
-
-	# Exit other modes
-	_cancel_placement()
-
-	# Enter new mode
-	current_mode = CommandMode.FORT_MODE
-	fort_type = type
-	fort_line_start = Vector3.INF
-	fort_line_end = Vector3.INF
-
-	var mode_name: String = "TRENCH" if type == FortType.TRENCH else "WIRE"
-	print("[ClearingTest] %s mode: ON (click+drag to paint line, right-click to cancel)" % mode_name)
-
-
-## Exit fortification mode
-func _exit_fort_mode() -> void:
-	if current_mode != CommandMode.FORT_MODE:
-		return
-
-	var mode_name: String = "TRENCH" if fort_type == FortType.TRENCH else "WIRE"
-	current_mode = CommandMode.PAINT_CLEAR
-	fort_type = FortType.NONE
-	fort_line_start = Vector3.INF
-	fort_line_end = Vector3.INF
-	if fort_ghost:
-		fort_ghost.hide_ghost()
-	print("[ClearingTest] %s mode: OFF" % mode_name)
-
-
-## Create a fortification job from line-painted coordinates
-func _create_fortification_job(center: Vector3, length: float, rotation_y: float) -> void:
-	var job_system = get_node_or_null("/root/JobSystem")
-	if not job_system:
-		push_warning("[ClearingTest] JobSystem not found")
-		return
-
-	match fort_type:
-		FortType.TRENCH:
-			if not job_system.has_method("create_trench_job"):
-				push_warning("[ClearingTest] JobSystem missing create_trench_job method")
-				return
-			# Pass rotation_y to create_trench_job for proper oriented prerequisites
-			var job = job_system.create_trench_job(center, length, 2.0, rotation_y)
-			if job:
-				print("[ClearingTest] Trench job created: #%d, %.1fm long at angle %.1f deg" % [
-					job.job_id, length, rad_to_deg(rotation_y)
-				])
-
-		FortType.WIRE:
-			if not job_system.has_method("create_wire_job"):
-				push_warning("[ClearingTest] JobSystem missing create_wire_job method")
-				return
-			# Pass rotation_y to create_wire_job for proper oriented prerequisites
-			var job = job_system.create_wire_job(center, length, 0, 0, rotation_y)
-			if job:
-				print("[ClearingTest] Wire job created: #%d, %.1fm long at angle %.1f deg" % [
-					job.job_id, length, rad_to_deg(rotation_y)
-				])
+## NOTE: Road and fortification modes now handled by BattleHUD/PlacementController
 
 
 ## =============================================================================
@@ -1715,7 +1351,7 @@ func _create_crater(center: Vector3) -> void:
 	var depth := 3.0   # 3m deep
 	var rim_height := 1.0  # 1m rim
 
-	print("[ClearingTest] Creating crater at %v (radius=%.1f, depth=%.1f)" % [center, radius, depth])
+	print("[ClearingTest] Creating crater at %s (radius=%.1f, depth=%.1f)" % [center, radius, depth])
 
 	# Modify the heightmap directly with crater shape
 	var cell_center: Vector2i = local_terrain.heightmap.world_to_cell(center.x, center.z)
@@ -1750,7 +1386,7 @@ func _raise_terrain(center: Vector3) -> void:
 	var radius := 8.0  # 8m radius
 	var height := 4.0  # 4m tall mound
 
-	print("[ClearingTest] Raising terrain at %v (radius=%.1f, height=%.1f)" % [center, radius, height])
+	print("[ClearingTest] Raising terrain at %s (radius=%.1f, height=%.1f)" % [center, radius, height])
 
 	var cell_center: Vector2i = local_terrain.heightmap.world_to_cell(center.x, center.z)
 	var cell_radius: int = int(ceil(radius / local_terrain.cell_size))

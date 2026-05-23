@@ -2,6 +2,9 @@ extends Node3D
 class_name TerrainChunk
 ## A single terrain chunk (256m x 256m) with mesh, collision, and navigation
 
+## Debug print control - set false to prevent console overflow
+const DEBUG_PRINTS := false
+
 signal mesh_ready
 signal nav_ready
 
@@ -68,6 +71,23 @@ func build_mesh(region_data: PackedFloat32Array, h_scale: float = 280.0, vegetat
 	var step: float = chunk_size / float(grid_resolution)
 	var data_width: int = grid_resolution + 1
 
+	# Spike detection - find min/max in region data
+	var min_h: float = INF
+	var max_h: float = -INF
+	var spike_count: int = 0
+	for i in range(region_data.size()):
+		var val: float = region_data[i]
+		min_h = minf(min_h, val)
+		max_h = maxf(max_h, val)
+		# Flag values outside expected 0-1 normalized range
+		if val < -0.1 or val > 1.1:
+			spike_count += 1
+
+	if spike_count > 0 or max_h > 1.1 or min_h < -0.1:
+		push_warning("[TerrainChunk] Chunk %s has %d spike values! Range: %.3f to %.3f (expected 0-1)" % [
+			coord, spike_count, min_h, max_h
+		])
+
 	# Generate vertices in a grid
 	var vertices: Array[Vector3] = []
 	var colors: Array[Color] = []
@@ -76,7 +96,9 @@ func build_mesh(region_data: PackedFloat32Array, h_scale: float = 280.0, vegetat
 		for x in range(grid_resolution + 1):
 			var local_x: float = x * step
 			var local_z: float = z * step
-			var h: float = region_data[z * data_width + x] * height_scale
+			# Clamp normalized height to prevent spikes from bad data
+			var normalized_h: float = clampf(region_data[z * data_width + x], 0.0, 1.0)
+			var h: float = normalized_h * height_scale
 
 			vertices.append(Vector3(local_x, h, local_z))
 			colors.append(_get_terrain_color(h, region_data[z * data_width + x], local_x, local_z, vegetation_terrain, bundles_per_chunk))
@@ -131,7 +153,8 @@ func build_mesh(region_data: PackedFloat32Array, h_scale: float = 280.0, vegetat
 	is_loaded = true
 	mesh_ready.emit()
 
-	print("[TerrainChunk] Chunk %s mesh built: %d vertices" % [coord, vertices.size()])
+	if DEBUG_PRINTS:
+		print("[TerrainChunk] Chunk %s mesh built: %d vertices" % [coord, vertices.size()])
 
 
 ## Create shared material for all chunks
@@ -154,24 +177,28 @@ static func _create_shared_material() -> void:
 				var diff_tex := load(diff_path) as Texture2D
 				if diff_tex:
 					shader_mat.set_shader_parameter("ground_diffuse", diff_tex)
-					print("[TerrainChunk] Loaded ground diffuse texture")
+					if DEBUG_PRINTS:
+						print("[TerrainChunk] Loaded ground diffuse texture")
 
 			if ResourceLoader.exists(norm_path):
 				var norm_tex := load(norm_path) as Texture2D
 				if norm_tex:
 					shader_mat.set_shader_parameter("ground_normal", norm_tex)
-					print("[TerrainChunk] Loaded ground normal texture")
+					if DEBUG_PRINTS:
+						print("[TerrainChunk] Loaded ground normal texture")
 
 			if ResourceLoader.exists(rough_path):
 				var rough_tex := load(rough_path) as Texture2D
 				if rough_tex:
 					shader_mat.set_shader_parameter("ground_roughness", rough_tex)
-					print("[TerrainChunk] Loaded ground roughness texture")
+					if DEBUG_PRINTS:
+						print("[TerrainChunk] Loaded ground roughness texture")
 
 			# Set texture parameters
 			shader_mat.set_shader_parameter("ground_texture_scale", 0.08)  # ~12m per tile
 			shader_mat.set_shader_parameter("ground_texture_blend", 0.35)  # Subtle blend
-			shader_mat.set_shader_parameter("height_scale", 280.0)  # Match terrain height scale
+			# NOTE: height_scale is set per-chunk in build_mesh(), not here
+			# This default is overridden when chunks are built
 
 			# Create transparent default for clearing_texture to prevent white terrain
 			# Unbound samplers return (1,1,1,1) which overwrites terrain color
@@ -182,7 +209,8 @@ static func _create_shared_material() -> void:
 
 			shared_material = shader_mat
 			_using_shader = true
-			print("[TerrainChunk] Using terrain shader with ground textures")
+			if DEBUG_PRINTS:
+				print("[TerrainChunk] Using terrain shader with ground textures")
 			return
 
 	# Fallback to basic material
@@ -194,7 +222,8 @@ static func _create_shared_material() -> void:
 	fallback_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
 	shared_material = fallback_mat
 	_using_shader = false
-	print("[TerrainChunk] Using fallback standard material")
+	if DEBUG_PRINTS:
+		print("[TerrainChunk] Using fallback standard material")
 
 
 ## Check if using shader material
@@ -289,7 +318,8 @@ func bake_navigation() -> void:
 	nav_region.navigation_mesh = nav_mesh
 	nav_ready.emit()
 
-	print("[TerrainChunk] Chunk %s navigation baked" % [coord])
+	if DEBUG_PRINTS:
+		print("[TerrainChunk] Chunk %s navigation baked" % [coord])
 
 
 ## Unload chunk (free resources)

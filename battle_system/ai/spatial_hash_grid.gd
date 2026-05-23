@@ -4,8 +4,10 @@ extends Node
 ## Spatial Hash Grid - Efficient spatial queries for AI
 ## Divides world into cells for O(1) neighbor lookups
 
-## Configuration
-const CELL_SIZE: float = 20.0  # Size of each grid cell
+const GridCoordsClass = preload("res://terrain/core/grid_coords.gd")
+
+## Configuration - uses canonical SPATIAL_CELL_SIZE from GridCoords
+const CELL_SIZE: float = GridCoordsClass.SPATIAL_CELL_SIZE  # 20m cells
 
 ## Storage
 var _cells: Dictionary = {}  # Vector2i -> Array[Node3D]

@@ -131,14 +131,27 @@ func generate_terrain(seed_value: int = -1) -> void:
 		terrain_generator.terrain_size = heightmap.size
 		terrain_generator.cell_size = cell_size
 		terrain_generator.height_scale = height_scale
+		print("[DIAG] TerrainManager.generate_terrain: Setting TerrainEngine height_scale=%.1f" % height_scale)
 
 		# Generate heightmap
 		generation_progress.emit("Generating heightmap", 0.1)
 		terrain_generator.generate(seed_value)
+		print("[DIAG] TerrainEngine.generate() complete. Checking heightmap_data...")
 
 		# Copy data to storage
 		heightmap.data = terrain_generator.heightmap_data.duplicate()
 		heightmap.height_scale = height_scale
+
+		# DIAGNOSTIC: Check heightmap data range
+		var min_h: float = INF
+		var max_h: float = -INF
+		for val in heightmap.data:
+			min_h = minf(min_h, val)
+			max_h = maxf(max_h, val)
+		print("[DIAG] Heightmap data range: %.4f to %.4f (expected 0-1 normalized)" % [min_h, max_h])
+		if max_h > 1.1 or min_h < -0.1:
+			push_warning("[DIAG] WARNING: Heightmap has values outside 0-1 range! This causes spikes!")
+		print("[DIAG] Actual terrain height range: %.1fm to %.1fm" % [min_h * height_scale, max_h * height_scale])
 
 		generation_progress.emit("Heightmap complete", 0.5)
 	else:
@@ -255,6 +268,16 @@ func _load_chunk(coord: Vector2i) -> void:
 			bundles_per_chunk = vegetation_manager._bundles_per_chunk
 
 	# Build mesh with vegetation bytes for rice paddy coloring
+	# DIAGNOSTIC: First chunk only - show what's being passed
+	if chunks.is_empty():
+		var region_min: float = INF
+		var region_max: float = -INF
+		for val in region:
+			region_min = minf(region_min, val)
+			region_max = maxf(region_max, val)
+		print("[DIAG] First chunk build_mesh: height_scale=%.1f, region data range: %.4f to %.4f" % [
+			height_scale, region_min, region_max
+		])
 	chunk.build_mesh(region, height_scale, veg_bytes, bundles_per_chunk)
 
 	# Create collision for raycasting

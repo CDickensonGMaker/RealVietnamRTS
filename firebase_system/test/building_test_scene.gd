@@ -1,30 +1,38 @@
 extends Node3D
 
 ## Building System Test Scene
-## Demonstrates automated base building with engineers and bulldozers
+## Demonstrates the construction loop with PlacementController and JobSystem
 ##
-## Uses BattleHUD autoload for unified selection/command UI.
-## Scene-specific status shown in top-left HUD label.
+## This test scene proves:
+## 1. Ghost preview appears with red/green validation (PlacementController)
+## 2. Jobs are created on placement commit (JobSystem)
+## 3. Workers auto-assign to jobs (WorkerController)
+## 4. Construction progresses through stages (ConstructionZone)
+## 5. Building completes with model/placeholder
+##
+## Uses PlacementController for CoH-style ghost preview with real-time validation.
 ##
 ## Controls:
-## - Left-click: Select units / Click terrain when in placement mode
+## - Left-click: Select units / Place building in placement mode
 ## - Right-click: Move selected units / Cancel placement
 ## - F: Place Firebase mode
-## - C: Clear Terrain mode
-## - 1-9: Building hotkeys (when firebase selected)
+## - C: Create Clear Terrain job
+## - L: Create Flatten Area job
+## - 1-9: Building placement hotkeys
 ## - E: Spawn Engineer
 ## - B: Spawn Bulldozer
 ## - ESC: Cancel placement mode
 
 const TestSceneBase = preload("res://test_scenes/common/test_scene_base.gd")
 const BuilderUnit = preload("res://firebase_system/test/builder_unit.gd")
-const BuilderAI = preload("res://firebase_system/builder_ai.gd")
 const BuildingData = preload("res://firebase_system/building_data.gd")
 const Firebase = preload("res://firebase_system/firebase.gd")
+const PlacementController = preload("res://firebase_system/placement_controller.gd")
 
 # Systems
-var builder_ai: BuilderAI
 var camera: Camera3D
+var _placement_controller: Node3D  # PlacementController instance
+var _job_system: Node  # JobSystem autoload
 
 # Units
 var engineers: Array[Node3D] = []
@@ -33,13 +41,18 @@ var bulldozers: Array[Node3D] = []
 # State
 var selected_firebase: Node3D = null
 var placement_mode: bool = false
-var placement_type: String = ""  # "firebase" or "clearing"
+var placement_type: String = ""  # "firebase", "clearing", "flatten"
 
 # HUD
 var hud_label: Label
 
 
 func _ready() -> void:
+	# Get autoload references
+	_job_system = get_node_or_null("/root/JobSystem")
+	if not _job_system:
+		push_warning("[BuildingTestScene] JobSystem autoload not found - some features disabled")
+
 	# Use TestSceneBase for consistent environment setup
 	var setup: Dictionary = TestSceneBase.setup_environment(self, {
 		"seed": 54321,
@@ -49,29 +62,44 @@ func _ready() -> void:
 	})
 	camera = setup.get("camera")
 
-	_setup_builder_ai()
+	_setup_placement_controller()
 	_spawn_initial_units()
 	_setup_test_terrain()
+	_connect_job_signals()
 
 	# Create minimal test-specific HUD (top-left info label)
 	hud_label = TestSceneBase.make_hud(self)
 
 	print("=== Building System Test Scene ===")
-	print("F: Place Firebase | C: Clear Terrain | ESC: Cancel")
+	print("F: Place Firebase | C: Clear Terrain | L: Flatten | ESC: Cancel")
 	print("E: Spawn Engineer | B: Spawn Bulldozer")
-	print("Select firebase then press 1-9 for buildings")
+	print("1-9: Building hotkeys (after selecting placement)")
 
 
-func _setup_builder_ai() -> void:
-	"""Initialize the builder AI system"""
-	builder_ai = BuilderAI.new()
-	builder_ai.name = "BuilderAI"
-	add_child(builder_ai)
+func _setup_placement_controller() -> void:
+	"""Initialize PlacementController for ghost preview"""
+	_placement_controller = PlacementController.new()
+	_placement_controller.name = "PlacementController"
+	add_child(_placement_controller)
 
 	# Connect signals
-	builder_ai.work_assigned.connect(_on_work_assigned)
-	builder_ai.work_completed.connect(_on_work_completed)
-	builder_ai.firebase_construction_started.connect(_on_firebase_started)
+	_placement_controller.placement_committed.connect(_on_placement_committed)
+	_placement_controller.placement_cancelled.connect(_on_placement_cancelled)
+	_placement_controller.validation_changed.connect(_on_validation_changed)
+	print("[BuildingTest] PlacementController initialized")
+
+
+func _connect_job_signals() -> void:
+	"""Connect to JobSystem signals for feedback"""
+	if not _job_system:
+		return
+
+	if _job_system.has_signal("job_created"):
+		_job_system.job_created.connect(_on_job_created)
+	if _job_system.has_signal("job_completed"):
+		_job_system.job_completed.connect(_on_job_completed)
+	if _job_system.has_signal("job_progress"):
+		_job_system.job_progress.connect(_on_job_progress)
 
 
 func _spawn_initial_units() -> void:
@@ -87,7 +115,6 @@ func _spawn_initial_units() -> void:
 		var engineer: Node3D = BuilderUnit.create_engineer(pos)
 		add_child(engineer)
 		engineers.append(engineer)
-		builder_ai.register_engineer(engineer)
 
 	# Spawn 2 bulldozers
 	for i in 2:
@@ -97,14 +124,15 @@ func _spawn_initial_units() -> void:
 		var bulldozer: Node3D = BuilderUnit.create_bulldozer(pos)
 		add_child(bulldozer)
 		bulldozers.append(bulldozer)
-		builder_ai.register_bulldozer(bulldozer)
+
+	print("[BuildingTest] Spawned %d engineers and %d bulldozers" % [engineers.size(), bulldozers.size()])
 
 
 func _setup_test_terrain() -> void:
 	"""Create some pre-cleared areas and jungle patches"""
 	# Pre-clear the center area
 	var terrain_system: Node = get_node_or_null("/root/TerrainClearingSystem")
-	if terrain_system:
+	if terrain_system and terrain_system.has_method("instant_clear"):
 		terrain_system.instant_clear(Vector3.ZERO, 20.0)
 
 	# Create visual jungle patches (not cleared)
@@ -186,7 +214,16 @@ func _create_simple_tree() -> Node3D:
 
 func _process(_delta: float) -> void:
 	_update_hud()
-	_update_unit_displays()
+	_update_placement_cursor()
+
+
+func _update_placement_cursor() -> void:
+	"""Update PlacementController cursor position each frame"""
+	if _placement_controller and _placement_controller.is_active() and camera:
+		var mouse_pos: Vector2 = get_viewport().get_mouse_position()
+		var world_pos: Vector3 = _screen_to_world(mouse_pos)
+		if world_pos != Vector3.INF:
+			_placement_controller.update_cursor_position(world_pos)
 
 
 func _update_hud() -> void:
@@ -194,23 +231,45 @@ func _update_hud() -> void:
 	if not hud_label:
 		return
 
-	var idle_counts: Dictionary = builder_ai.get_idle_count()
+	var idle_engineers: int = _count_idle_units(engineers)
+	var idle_bulldozers: int = _count_idle_units(bulldozers)
 	var firebase_count: int = get_tree().get_nodes_in_group("firebases").size()
+
+	# Get job counts
+	var pending_jobs: int = 0
+	var active_jobs: int = 0
+	if _job_system:
+		if _job_system.has_method("get_pending_job_count"):
+			pending_jobs = _job_system.get_pending_job_count()
+		if _job_system.has_method("get_in_progress_job_count"):
+			active_jobs = _job_system.get_in_progress_job_count()
 
 	var lines: PackedStringArray = [
 		"BUILDING SYSTEM TEST",
-		"Engineers: %d (%d idle)" % [engineers.size(), idle_counts["engineers"]],
-		"Bulldozers: %d (%d idle)" % [bulldozers.size(), idle_counts["bulldozers"]],
+		"Engineers: %d (%d idle)" % [engineers.size(), idle_engineers],
+		"Bulldozers: %d (%d idle)" % [bulldozers.size(), idle_bulldozers],
 		"Firebases: %d" % firebase_count,
+		"Jobs: %d pending, %d active" % [pending_jobs, active_jobs],
 	]
 
 	if selected_firebase:
 		lines.append("")
 		lines.append("Selected: %s" % selected_firebase.firebase_name)
-		lines.append("Supply: %d/%d" % [int(selected_firebase.supply_level), int(selected_firebase.max_supply)])
-		lines.append("Level: %s" % selected_firebase.get_level_name())
+		var supply: float = selected_firebase.supply_level if "supply_level" in selected_firebase else 0.0
+		var max_supply: float = selected_firebase.max_supply if "max_supply" in selected_firebase else 1000.0
+		lines.append("Supply: %d/%d" % [int(supply), int(max_supply)])
+		if selected_firebase.has_method("get_level_name"):
+			lines.append("Level: %s" % selected_firebase.get_level_name())
 
-	if placement_mode:
+	if _placement_controller and _placement_controller.is_active():
+		lines.append("")
+		lines.append("[PLACEMENT MODE: %s]" % _placement_controller.get_current_building_name())
+		var msg: String = _placement_controller.get_validation_message()
+		if msg != "":
+			lines.append("Status: %s" % msg)
+		else:
+			lines.append("Click to place")
+	elif placement_mode:
 		lines.append("")
 		lines.append("[MODE: %s]" % placement_type.to_upper())
 		lines.append("Click terrain to place")
@@ -218,34 +277,45 @@ func _update_hud() -> void:
 	hud_label.text = "\n".join(lines)
 
 
-func _update_unit_displays() -> void:
-	"""Update unit status displays based on their tasks"""
-	for unit in engineers + bulldozers:
+func _count_idle_units(units: Array[Node3D]) -> int:
+	"""Count units that are idle (not working on a job)"""
+	var count: int = 0
+	for unit in units:
 		if not is_instance_valid(unit):
 			continue
-
-		var task: Dictionary = builder_ai.get_unit_task(unit)
-		var task_type: int = task.get("type", 0)
-
-		var status: String = "Idle"
-		match task_type:
-			1:  # MOVING
-				status = "Moving"
-			2:  # CLEARING
-				status = "Clearing"
-			3:  # BUILDING
-				status = "Building"
-
-		if unit.has_method("set_task_status"):
-			unit.set_task_status(status)
+		# Check if unit has a WorkerController with state
+		var worker_ctrl: Node = unit.get_node_or_null("WorkerController")
+		if is_instance_valid(worker_ctrl) and "state" in worker_ctrl:
+			# WorkerController.State.IDLE == 0
+			if worker_ctrl.state == WorkerController.State.IDLE:
+				count += 1
+		else:
+			# Assume idle if no state tracking
+			count += 1
+	return count
 
 
 func _input(event: InputEvent) -> void:
-	# Handle placement clicks
+	# Let PlacementController handle input when active
+	if _placement_controller and _placement_controller.is_active():
+		if event is InputEventMouseButton or event is InputEventKey:
+			var world_pos: Vector3 = Vector3.ZERO
+			if event is InputEventMouseButton:
+				world_pos = _screen_to_world((event as InputEventMouseButton).position)
+			if _placement_controller.handle_input(event, world_pos):
+				get_viewport().set_input_as_handled()
+				return
+
+	# Handle placement clicks for non-building modes
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			if placement_mode:
 				_handle_placement_click(event.position)
+			else:
+				# Try to select a firebase
+				var world_pos: Vector3 = _screen_to_world(event.position)
+				if world_pos != Vector3.INF:
+					_try_select_firebase(world_pos)
 		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			if placement_mode:
 				_cancel_placement()
@@ -259,45 +329,72 @@ func _handle_hotkey(event: InputEventKey) -> void:
 	match event.keycode:
 		KEY_ESCAPE:
 			_cancel_placement()
+			if _placement_controller:
+				_placement_controller.cancel_placement()
 		KEY_F:
 			_start_firebase_placement()
 		KEY_C:
 			_start_clearing_placement()
+		KEY_L:
+			_start_flatten_placement()
 		KEY_E:
 			_spawn_engineer()
 		KEY_B:
 			_spawn_bulldozer()
-		# Building hotkeys 1-9
+		# Building hotkeys 1-9 - use PlacementController for ghost preview
 		KEY_1:
-			_request_building(BuildingData.BuildingType.SANDBAG_LIGHT)
+			_start_building_placement(BuildingData.BuildingType.SANDBAG_LIGHT)
 		KEY_2:
-			_request_building(BuildingData.BuildingType.SANDBAG_HEAVY)
+			_start_building_placement(BuildingData.BuildingType.SANDBAG_HEAVY)
 		KEY_3:
-			_request_building(BuildingData.BuildingType.BUNKER)
+			_start_building_placement(BuildingData.BuildingType.BUNKER)
 		KEY_4:
-			_request_building(BuildingData.BuildingType.MACHINE_GUN_NEST)
+			_start_building_placement(BuildingData.BuildingType.MACHINE_GUN_NEST)
 		KEY_5:
-			_request_building(BuildingData.BuildingType.MORTAR_PIT)
+			_start_building_placement(BuildingData.BuildingType.MORTAR_PIT)
 		KEY_6:
-			_request_building(BuildingData.BuildingType.WATCHTOWER)
+			_start_building_placement(BuildingData.BuildingType.WATCHTOWER)
 		KEY_7:
-			_request_building(BuildingData.BuildingType.HELIPAD)
+			_start_building_placement(BuildingData.BuildingType.HELIPAD)
 		KEY_8:
-			_request_building(BuildingData.BuildingType.AMMO_BUNKER)
+			_start_building_placement(BuildingData.BuildingType.AMMO_BUNKER)
 		KEY_9:
-			_request_building(BuildingData.BuildingType.MEDICAL_STATION)
+			_start_building_placement(BuildingData.BuildingType.MEDICAL_STATION)
+
+
+func _start_building_placement(building_type: int) -> void:
+	"""Start building placement with ghost preview using PlacementController"""
+	if not _placement_controller:
+		print("[BuildingTest] PlacementController not available")
+		return
+
+	_cancel_placement()  # Cancel any terrain placement mode
+	_placement_controller.start_placement(building_type)
+	print("[BuildingTest] Building placement started - press ESC to cancel")
 
 
 func _start_firebase_placement() -> void:
+	if _placement_controller:
+		_placement_controller.cancel_placement()
 	placement_mode = true
 	placement_type = "firebase"
 	print("[BuildingTest] Click to place firebase...")
 
 
 func _start_clearing_placement() -> void:
+	if _placement_controller:
+		_placement_controller.cancel_placement()
 	placement_mode = true
 	placement_type = "clearing"
-	print("[BuildingTest] Click to request terrain clearing...")
+	print("[BuildingTest] Click to create CLEAR_TERRAIN job...")
+
+
+func _start_flatten_placement() -> void:
+	if _placement_controller:
+		_placement_controller.cancel_placement()
+	placement_mode = true
+	placement_type = "flatten"
+	print("[BuildingTest] Click to create FLATTEN_AREA job...")
 
 
 func _cancel_placement() -> void:
@@ -309,18 +406,67 @@ func _cancel_placement() -> void:
 
 
 func _handle_placement_click(screen_pos: Vector2) -> void:
-	"""Handle left click during placement mode"""
+	"""Handle left click during terrain placement mode"""
 	var world_pos: Vector3 = _screen_to_world(screen_pos)
 	if world_pos == Vector3.INF:
 		return
 
-	if placement_type == "firebase":
-		builder_ai.request_firebase(world_pos, "Firebase %d" % (get_tree().get_nodes_in_group("firebases").size() + 1))
-	elif placement_type == "clearing":
-		builder_ai.request_clearing(world_pos)
+	match placement_type:
+		"firebase":
+			_create_firebase_at(world_pos)
+		"clearing":
+			_create_clear_job_at(world_pos)
+		"flatten":
+			_create_flatten_job_at(world_pos)
 
 	placement_mode = false
 	placement_type = ""
+
+
+func _create_firebase_at(world_pos: Vector3) -> void:
+	"""Create a firebase at the given position"""
+	var firebase: Node3D = Firebase.new()
+	firebase.name = "Firebase_%d" % (get_tree().get_nodes_in_group("firebases").size() + 1)
+	firebase.firebase_name = firebase.name
+	firebase.global_position = world_pos
+	add_child(firebase)
+	print("[BuildingTest] Firebase created at %v" % world_pos)
+
+
+func _create_clear_job_at(world_pos: Vector3) -> void:
+	"""Create a CLEAR_TERRAIN job at the given position"""
+	if not _job_system:
+		print("[BuildingTest] JobSystem not available")
+		return
+
+	if _job_system.has_method("create_area_job"):
+		var clear_size: float = 15.0  # 15m radius
+		var half_size: float = clear_size * 0.5
+		var min_corner := Vector3(world_pos.x - half_size, 0, world_pos.z - half_size)
+		var max_corner := Vector3(world_pos.x + half_size, 0, world_pos.z + half_size)
+		var job: Node = _job_system.create_area_job(0, min_corner, max_corner)  # 0 = CLEAR_TERRAIN
+		if job:
+			print("[BuildingTest] CLEAR_TERRAIN job created at %v (15m radius)" % world_pos)
+	else:
+		print("[BuildingTest] JobSystem.create_area_job() not available")
+
+
+func _create_flatten_job_at(world_pos: Vector3) -> void:
+	"""Create a FLATTEN_AREA job at the given position"""
+	if not _job_system:
+		print("[BuildingTest] JobSystem not available")
+		return
+
+	if _job_system.has_method("create_area_job"):
+		var flatten_size: float = 20.0  # 20m radius
+		var half_size: float = flatten_size * 0.5
+		var min_corner := Vector3(world_pos.x - half_size, 0, world_pos.z - half_size)
+		var max_corner := Vector3(world_pos.x + half_size, 0, world_pos.z + half_size)
+		var job: Node = _job_system.create_area_job(1, min_corner, max_corner)  # 1 = FLATTEN_AREA
+		if job:
+			print("[BuildingTest] FLATTEN_AREA job created at %v (20m radius)" % world_pos)
+	else:
+		print("[BuildingTest] JobSystem.create_area_job() not available")
 
 
 func _screen_to_world(screen_pos: Vector2) -> Vector3:
@@ -335,6 +481,7 @@ func _screen_to_world(screen_pos: Vector2) -> Vector3:
 	var space: PhysicsDirectSpaceState3D = get_viewport().get_world_3d().direct_space_state
 	var query := PhysicsRayQueryParameters3D.create(from, from + dir * 2000.0)
 	query.collision_mask = 1
+
 	var result: Dictionary = space.intersect_ray(query)
 	if not result.is_empty() and result.has("position"):
 		return result["position"] as Vector3
@@ -355,22 +502,13 @@ func _try_select_firebase(world_pos: Vector3) -> void:
 	selected_firebase = null
 
 	for fb in get_tree().get_nodes_in_group("firebases"):
-		if fb.global_position.distance_to(world_pos) < fb.get_firebase_radius():
+		var radius: float = 30.0  # Default radius
+		if fb.has_method("get_firebase_radius"):
+			radius = fb.get_firebase_radius()
+		if fb.global_position.distance_to(world_pos) < radius:
 			selected_firebase = fb
-			print("[BuildingTest] Selected firebase: %s" % fb.firebase_name)
+			print("[BuildingTest] Selected firebase: %s" % fb.name)
 			return
-
-
-func _request_building(building_type: int) -> void:
-	"""Request a building at the selected firebase"""
-	if not selected_firebase:
-		print("[BuildingTest] Select a firebase first! (click on one)")
-		return
-
-	if builder_ai.request_building(selected_firebase, building_type):
-		print("[BuildingTest] Building queued!")
-	else:
-		print("[BuildingTest] Cannot build - check supply or zones")
 
 
 func _spawn_engineer() -> void:
@@ -381,8 +519,7 @@ func _spawn_engineer() -> void:
 	var engineer: Node3D = BuilderUnit.create_engineer(pos)
 	add_child(engineer)
 	engineers.append(engineer)
-	builder_ai.register_engineer(engineer)
-	print("[BuildingTest] Spawned new engineer")
+	print("[BuildingTest] Spawned new engineer at %v" % pos)
 
 
 func _spawn_bulldozer() -> void:
@@ -393,19 +530,45 @@ func _spawn_bulldozer() -> void:
 	var bulldozer: Node3D = BuilderUnit.create_bulldozer(pos)
 	add_child(bulldozer)
 	bulldozers.append(bulldozer)
-	builder_ai.register_bulldozer(bulldozer)
-	print("[BuildingTest] Spawned new bulldozer")
+	print("[BuildingTest] Spawned new bulldozer at %v" % pos)
 
 
-# BuilderAI Callbacks
+# =============================================================================
+# SIGNAL HANDLERS
+# =============================================================================
 
-func _on_work_assigned(unit: Node3D, task: Dictionary) -> void:
-	print("[BuildingTest] Work assigned to %s: %s" % [unit.name, task.get("type", "unknown")])
+func _on_placement_committed(building_type: int, position: Vector3) -> void:
+	"""Handle successful building placement"""
+	var data: BuildingData = BuildingData.get_building_data(building_type)
+	var building_name: String = data.display_name if data else "Building"
+	print("[BuildingTest] Building placed: %s at %v" % [building_name, position])
 
 
-func _on_work_completed(unit: Node3D, _task: Dictionary) -> void:
-	print("[BuildingTest] Work completed by %s" % unit.name)
+func _on_placement_cancelled() -> void:
+	"""Handle placement cancellation"""
+	print("[BuildingTest] Building placement cancelled")
 
 
-func _on_firebase_started(position: Vector3) -> void:
-	print("[BuildingTest] Firebase construction started at %s" % position)
+func _on_validation_changed(valid: bool, message: String) -> void:
+	"""Handle validation status change"""
+	if not valid and message != "":
+		# Could show visual feedback here
+		pass
+
+
+func _on_job_created(job: Node) -> void:
+	"""Handle job creation notification"""
+	if job and "job_type" in job:
+		print("[BuildingTest] Job created: type=%d" % job.job_type)
+
+
+func _on_job_completed(job: Node) -> void:
+	"""Handle job completion notification"""
+	if job and "job_type" in job:
+		print("[BuildingTest] Job completed: type=%d" % job.job_type)
+
+
+func _on_job_progress(job: Node, progress: float) -> void:
+	"""Handle job progress notification"""
+	# Could update visual feedback
+	pass

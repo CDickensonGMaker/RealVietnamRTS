@@ -1,5 +1,5 @@
 extends Node
-class_name SupplyManager
+## Note: No class_name to avoid conflict with autoload singleton name "SupplyManager"
 
 ## Supply Manager - Handles logistics and supply delivery
 ## Manages supply points, delivery routes, and consumption

@@ -1,12 +1,11 @@
 extends PanelContainer
 class_name CommandPanel
-## Bottom-right button grid for context-sensitive commands.
-## Uses Company of Heroes / Sudden Strike style layout:
-##   - Row 1: Universal commands (Move, Hold, Stop, Patrol) - always visible
-##   - Row 2: Contextual commands (Build, Repair, Mines, Special) - unit-dependent
-##   - Row 3: Unit-type specific abilities
+## Global Order Panel - Macro-level commands for Vietnam RTS.
+## Player issues high-level orders; units autonomously execute them.
+## No micro-management - just strategic command placement.
 ##
-## Basic infantry have NO special abilities to keep micro simple per game design.
+## Design philosophy: Player is the commander, not a babysitter.
+## Orders create zones/tasks that available units fulfill.
 
 const MilitaryTheme = preload("res://battle_system/ui/military_theme.gd")
 const CursorModeScript = preload("res://battle_system/ui/cursor_mode.gd")
@@ -25,79 +24,64 @@ signal build_menu_requested()
 # CONFIGURATION
 # =============================================================================
 
-const PANEL_WIDTH: float = 296.0
+const PANEL_WIDTH: float = 340.0
 const PANEL_HEIGHT: float = 180.0
-const BUTTON_SIZE: float = 56.0
-const GRID_COLS: int = 4
+const BUTTON_SIZE: float = 52.0
+const GRID_COLS: int = 5
 const ROW_SPACING: int = 4
 
 # =============================================================================
-# COMMAND DEFINITIONS - ROW 1: UNIVERSAL (always visible)
+# COMMAND DEFINITIONS - CONSTRUCTION ORDERS (Row 1)
+# These create zones that engineers/bulldozers auto-fulfill
 # =============================================================================
 
-const UNIVERSAL_COMMANDS: Array[Dictionary] = [
-	{"name": "move", "label": "MOVE", "hotkey": "M", "icon_color": Color(0.3, 0.8, 0.3)},
-	{"name": "hold", "label": "HOLD", "hotkey": "H", "icon_color": Color(0.6, 0.6, 0.8)},
-	{"name": "stop", "label": "STOP", "hotkey": "S", "icon_color": Color(0.8, 0.8, 0.8)},
-	{"name": "patrol", "label": "PATROL", "hotkey": "P", "icon_color": Color(0.5, 0.7, 0.9)},
+const CONSTRUCTION_ORDERS: Array[Dictionary] = [
+	{"name": "clear", "label": "CLEAR", "hotkey": "C", "icon_color": Color(0.6, 0.4, 0.2),
+	 "tooltip": "Paint area to clear jungle. Engineers use det-cord."},
+	{"name": "flatten", "label": "FLAT", "hotkey": "F", "icon_color": Color(0.5, 0.5, 0.3),
+	 "tooltip": "Paint area to flatten terrain. Bulldozers grade."},
+	{"name": "build", "label": "BUILD", "hotkey": "B", "icon_color": Color(0.5, 0.6, 0.4),
+	 "tooltip": "Place building. Engineers construct."},
+	{"name": "repair", "label": "REPAIR", "hotkey": "R", "icon_color": Color(0.6, 0.7, 0.3),
+	 "tooltip": "Click structure to repair. Engineers fix."},
+	{"name": "dozer_clear", "label": "GRADE", "hotkey": "G", "icon_color": Color(0.7, 0.5, 0.2),
+	 "tooltip": "Draw line for bulldozer road clearing."},
 ]
 
 # =============================================================================
-# COMMAND DEFINITIONS - ROW 2: CONTEXTUAL (unit capability based)
+# COMMAND DEFINITIONS - TACTICAL ORDERS (Row 2)
+# High-level combat/movement commands
 # =============================================================================
 
-## Engineer capabilities
-const CMD_BUILD := {"name": "build", "label": "BUILD", "hotkey": "B", "icon_color": Color(0.5, 0.6, 0.4)}
-const CMD_REPAIR := {"name": "repair", "label": "REPAIR", "hotkey": "R", "icon_color": Color(0.6, 0.7, 0.3)}
-const CMD_MINES := {"name": "mines", "label": "MINES", "hotkey": "N", "icon_color": Color(0.7, 0.5, 0.3)}
-const CMD_CLEAR := {"name": "clear", "label": "CLEAR", "hotkey": "C", "icon_color": Color(0.6, 0.4, 0.2)}
-
-## Bulldozer capabilities
-const CMD_DOZER_CLEAR := {"name": "dozer_clear", "label": "GRADE", "hotkey": "G", "icon_color": Color(0.7, 0.5, 0.2)}
-const CMD_FLATTEN := {"name": "flatten", "label": "FLATTEN", "hotkey": "F", "icon_color": Color(0.5, 0.5, 0.3)}
-
-## Bunker/structure commands
-const CMD_GARRISON := {"name": "garrison", "label": "ENTER", "hotkey": "G", "icon_color": Color(0.4, 0.5, 0.6)}
-const CMD_UNLOAD := {"name": "unload", "label": "EXIT", "hotkey": "U", "icon_color": Color(0.6, 0.5, 0.4)}
-
-## Transport commands (helicopters, trucks, APCs)
-const CMD_LOAD := {"name": "load", "label": "LOAD", "hotkey": "L", "icon_color": Color(0.4, 0.6, 0.5)}
-const CMD_UNLOAD_CARGO := {"name": "unload", "label": "UNLOAD", "hotkey": "U", "icon_color": Color(0.6, 0.5, 0.4)}
-
-## Attack move (available to all combat units)
-const CMD_ATTACK_MOVE := {"name": "attack_move", "label": "A-MOVE", "hotkey": "A", "icon_color": Color(0.9, 0.5, 0.2)}
+const TACTICAL_ORDERS: Array[Dictionary] = [
+	{"name": "attack_move", "label": "A-MOVE", "hotkey": "A", "icon_color": Color(0.9, 0.5, 0.2),
+	 "tooltip": "Attack-move to location. Engage enemies en route."},
+	{"name": "patrol", "label": "PATROL", "hotkey": "P", "icon_color": Color(0.5, 0.7, 0.9),
+	 "tooltip": "Set patrol route. Units auto-patrol."},
+	{"name": "defend", "label": "DEFEND", "hotkey": "D", "icon_color": Color(0.4, 0.5, 0.7),
+	 "tooltip": "Defend position. Units hold and engage."},
+	{"name": "garrison", "label": "ENTER", "hotkey": "E", "icon_color": Color(0.4, 0.5, 0.6),
+	 "tooltip": "Enter nearest bunker/structure."},
+	{"name": "unload", "label": "EXIT", "hotkey": "U", "icon_color": Color(0.6, 0.5, 0.4),
+	 "tooltip": "Exit garrison or unload cargo."},
+]
 
 # =============================================================================
-# COMMAND DEFINITIONS - ROW 3: UNIT-TYPE SPECIFIC
+# COMMAND DEFINITIONS - AIR/SUPPORT ORDERS (Row 3)
+# Fire support and air operations
 # =============================================================================
 
-## Artillery commands (when deployed)
-const ARTILLERY_DEPLOYED_COMMANDS: Array[Dictionary] = [
-	{"name": "fire_mission", "label": "FIRE", "hotkey": "F", "icon_color": Color(0.9, 0.3, 0.2)},
-	{"name": "pack_up", "label": "PACK UP", "hotkey": "K", "icon_color": Color(0.5, 0.5, 0.5)},
-]
-
-## Artillery commands (when packed)
-const ARTILLERY_PACKED_COMMANDS: Array[Dictionary] = [
-	{"name": "deploy", "label": "DEPLOY", "hotkey": "D", "icon_color": Color(0.4, 0.6, 0.4)},
-]
-
-## Airplane commands (idle at airport)
-const AIRPLANE_IDLE_COMMANDS: Array[Dictionary] = [
-	{"name": "takeoff", "label": "TAKE OFF", "hotkey": "T", "icon_color": Color(0.4, 0.6, 0.8)},
-]
-
-## Airplane commands (in flight)
-const AIRPLANE_FLYING_COMMANDS: Array[Dictionary] = [
-	{"name": "bomb", "label": "BOMB", "hotkey": "1", "icon_color": Color(0.9, 0.3, 0.2)},
-	{"name": "napalm", "label": "NAPALM", "hotkey": "2", "icon_color": Color(0.9, 0.5, 0.2)},
-	{"name": "rockets", "label": "ROCKETS", "hotkey": "3", "icon_color": Color(0.7, 0.3, 0.2)},
-	{"name": "rtb", "label": "RTB", "hotkey": "0", "icon_color": Color(0.5, 0.5, 0.7)},
-]
-
-## Tank / Vehicle commands
-const VEHICLE_COMMANDS: Array[Dictionary] = [
-	{"name": "reverse", "label": "REVERSE", "hotkey": "V", "icon_color": Color(0.6, 0.6, 0.5)},
+const SUPPORT_ORDERS: Array[Dictionary] = [
+	{"name": "fire_mission", "label": "ARTY", "hotkey": "1", "icon_color": Color(0.9, 0.3, 0.2),
+	 "tooltip": "Call artillery fire mission."},
+	{"name": "napalm", "label": "NAPALM", "hotkey": "2", "icon_color": Color(0.9, 0.5, 0.2),
+	 "tooltip": "Call napalm strike (clears jungle)."},
+	{"name": "bomb", "label": "BOMB", "hotkey": "3", "icon_color": Color(0.8, 0.3, 0.3),
+	 "tooltip": "Call bomb run."},
+	{"name": "medevac", "label": "MEDVAC", "hotkey": "4", "icon_color": Color(0.3, 0.8, 0.3),
+	 "tooltip": "Request medevac helicopter."},
+	{"name": "resupply", "label": "SUPPLY", "hotkey": "5", "icon_color": Color(0.5, 0.6, 0.3),
+	 "tooltip": "Request supply drop/convoy."},
 ]
 
 # =============================================================================
@@ -130,8 +114,11 @@ func _ready() -> void:
 	if BattleSignals:
 		BattleSignals.selection_changed.connect(_on_selection_changed)
 
-	# Initialize hidden
-	visible = false
+	# Build initial buttons (always visible)
+	_rebuild_buttons()
+
+	# Always visible - global command panel
+	visible = true
 
 
 func _setup_theme() -> void:
@@ -166,11 +153,11 @@ func _on_selection_changed(_selected: Array = []) -> void:
 	else:
 		_current_selection = []
 
-	# Toggle visibility
-	visible = _current_selection.size() > 0
 
-	# Rebuild button grid
-	_rebuild_buttons()
+func _update_button_states() -> void:
+	# For now, all buttons are always enabled
+	# In the future, grey out unavailable commands
+	pass
 
 
 func _rebuild_buttons() -> void:
@@ -181,83 +168,23 @@ func _rebuild_buttons() -> void:
 	_buttons.clear()
 	_hotkey_map.clear()
 
-	if _current_selection.is_empty():
-		return
-
-	# Analyze selection for capabilities
-	var selection_info: Dictionary = _analyze_selection()
-
-	# === ROW 1: Universal Commands (always visible) ===
-	for cmd in UNIVERSAL_COMMANDS:
+	# === ROW 1: Construction Orders (always visible) ===
+	for cmd in CONSTRUCTION_ORDERS:
 		_create_command_button(_row_containers[0], cmd)
 
-	# === ROW 2: Contextual Commands (based on unit capabilities) ===
-	var row2_commands: Array[Dictionary] = []
+	# === ROW 2: Tactical Orders (always visible) ===
+	for cmd in TACTICAL_ORDERS:
+		_create_command_button(_row_containers[1], cmd)
 
-	# Attack-move for combat units
-	if selection_info.has_combat_units:
-		row2_commands.append(CMD_ATTACK_MOVE)
+	# === ROW 3: Support Orders (always visible) ===
+	for cmd in SUPPORT_ORDERS:
+		_create_command_button(_row_containers[2], cmd)
 
-	# Engineer capabilities
-	if selection_info.has_engineer:
-		row2_commands.append(CMD_BUILD)
-		row2_commands.append(CMD_CLEAR)
+	# All rows always visible in macro mode
+	for row in _row_containers:
+		row.visible = true
 
-	# Bulldozer capabilities (separate from engineer)
-	if selection_info.has_bulldozer:
-		row2_commands.append(CMD_DOZER_CLEAR)
-		row2_commands.append(CMD_FLATTEN)
-
-	# Bunker / garrison capability
-	if selection_info.has_bunker:
-		row2_commands.append(CMD_GARRISON)
-		row2_commands.append(CMD_UNLOAD)
-
-	# Transport capability
-	if selection_info.has_transport:
-		if not CMD_LOAD in row2_commands:
-			row2_commands.append(CMD_LOAD)
-		if not CMD_UNLOAD_CARGO in row2_commands:
-			row2_commands.append(CMD_UNLOAD_CARGO)
-
-	# Add Row 2 buttons (max 4)
-	for i in mini(row2_commands.size(), GRID_COLS):
-		_create_command_button(_row_containers[1], row2_commands[i])
-
-	# Hide row 2 if empty
-	_row_containers[1].visible = row2_commands.size() > 0
-
-	# === ROW 3: Unit-Type Specific Commands ===
-	var row3_commands: Array[Dictionary] = []
-
-	# Artillery (deployed)
-	if selection_info.has_artillery_deployed:
-		row3_commands.append_array(ARTILLERY_DEPLOYED_COMMANDS)
-
-	# Artillery (packed)
-	if selection_info.has_artillery_packed:
-		row3_commands.append_array(ARTILLERY_PACKED_COMMANDS)
-
-	# Airplane (idle)
-	if selection_info.has_airplane_idle:
-		row3_commands.append_array(AIRPLANE_IDLE_COMMANDS)
-
-	# Airplane (flying)
-	if selection_info.has_airplane_flying:
-		row3_commands.append_array(AIRPLANE_FLYING_COMMANDS)
-
-	# Vehicle commands
-	if selection_info.has_vehicle and not selection_info.has_transport:
-		row3_commands.append_array(VEHICLE_COMMANDS)
-
-	# Add Row 3 buttons (max 4)
-	for i in mini(row3_commands.size(), GRID_COLS):
-		_create_command_button(_row_containers[2], row3_commands[i])
-
-	# Hide row 3 if empty
-	_row_containers[2].visible = row3_commands.size() > 0
-
-	# Adjust panel height based on visible rows
+	# Adjust panel height
 	_update_panel_size()
 
 
@@ -360,17 +287,20 @@ func _create_command_button(parent: Control, cmd: Dictionary) -> void:
 	var vbox := VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	vbox.add_theme_constant_override("separation", 2)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE  # Pass clicks to button
 	button.add_child(vbox)
 
 	# Icon placeholder (28x28 ColorRect)
 	var icon_container := CenterContainer.new()
 	icon_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	icon_container.mouse_filter = Control.MOUSE_FILTER_IGNORE  # Pass clicks to button
 	vbox.add_child(icon_container)
 
 	var icon_slot := ColorRect.new()
 	icon_slot.name = "IconSlot"
 	icon_slot.custom_minimum_size = Vector2(28, 28)
 	icon_slot.color = cmd.get("icon_color", Color(0.5, 0.5, 0.5))
+	icon_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE  # Pass clicks to button
 	icon_container.add_child(icon_slot)
 
 	# Label
@@ -379,6 +309,7 @@ func _create_command_button(parent: Control, cmd: Dictionary) -> void:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 8)
 	label.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_PRIMARY)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE  # Pass clicks to button
 	vbox.add_child(label)
 
 	# Hotkey hint (top-right)
@@ -387,6 +318,7 @@ func _create_command_button(parent: Control, cmd: Dictionary) -> void:
 	hotkey.add_theme_font_size_override("font_size", 8)
 	hotkey.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_SECONDARY)
 	hotkey.position = Vector2(BUTTON_SIZE - 12, 2)
+	hotkey.mouse_filter = Control.MOUSE_FILTER_IGNORE  # Pass clicks to button
 	button.add_child(hotkey)
 
 	# Apply button theme
@@ -408,8 +340,9 @@ func _create_command_button(parent: Control, cmd: Dictionary) -> void:
 
 
 func _on_button_pressed(command_name: String) -> void:
+	print("[CommandPanel] >>> BUTTON CLICKED: %s <<<" % command_name)
 	command_pressed.emit(command_name)
-	print("[CommandPanel] Command: %s" % command_name)
+	print("[CommandPanel] Signal emitted for: %s" % command_name)
 
 
 func _input(event: InputEvent) -> void:

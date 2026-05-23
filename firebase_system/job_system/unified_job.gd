@@ -151,8 +151,8 @@ static func create(type: Type, center_world: Vector3, size_world: Vector2 = Vect
 	# Calculate work positions around perimeter
 	job._calculate_work_positions()
 
-	# Set default work required based on job type and size
-	job.work_required = job._calculate_default_work()
+	# Set default work required based on job type and size (minimum 1.0 to prevent freeze)
+	job.work_required = maxf(1.0, job._calculate_default_work())
 
 	# Initialize stages based on job type
 	job._initialize_stages()
@@ -391,9 +391,17 @@ func add_work(amount: float) -> void:
 	stage.work_done += amount
 	work_done += amount
 
-	# Check if stage complete
-	while current_stage_index < stages.size():
+	# Check if stage complete (guard against zero work_required to prevent infinite loop)
+	var loop_guard: int = 0
+	const MAX_STAGE_ITERATIONS: int = 100
+	while current_stage_index < stages.size() and loop_guard < MAX_STAGE_ITERATIONS:
+		loop_guard += 1
 		stage = stages[current_stage_index]
+		# Skip stages with zero or negative work_required (shouldn't happen, but prevents freeze)
+		if stage.work_required <= 0.0:
+			stage_completed.emit(self, current_stage_index)
+			current_stage_index += 1
+			continue
 		if stage.work_done >= stage.work_required:
 			# Stage complete
 			stage_completed.emit(self, current_stage_index)
@@ -405,6 +413,10 @@ func add_work(amount: float) -> void:
 				return
 		else:
 			break
+
+	if loop_guard >= MAX_STAGE_ITERATIONS:
+		push_error("[UnifiedJob] Stage loop exceeded max iterations - job #%d may have invalid stages" % job_id)
+		set_state(State.FAILED)
 
 	progress_updated.emit(self, get_progress())
 

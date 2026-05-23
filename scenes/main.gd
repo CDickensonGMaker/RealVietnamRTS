@@ -50,6 +50,14 @@ func _ready() -> void:
 	# For now spawn immediately on flat ground
 	_spawn_test_units()
 
+	# Set camera bounds to match map size (3000m x 3000m)
+	if camera and camera.has_method("set_map_bounds"):
+		camera.set_map_bounds(Vector3(0, 0, 0), Vector3(3000, 500, 3000))
+
+	# Center camera on map center where units are
+	if camera and camera.has_method("center_on_position"):
+		camera.center_on_position(Vector3(1500.0, 0.0, 1500.0), true)
+
 	print("")
 	print("Controls:")
 	print("  WASD: Pan camera")
@@ -125,17 +133,20 @@ func _init_systems() -> void:
 func _spawn_test_units() -> void:
 	print("Spawning test units...")
 
-	# Spawn US forces (player controlled)
-	_spawn_squad(us_rifle_data, Vector3(-10, 0, 0), "US_Rifle_1")
-	_spawn_squad(us_rifle_data, Vector3(-10, 0, 5), "US_Rifle_2")
-	_spawn_squad(us_engineer_data, Vector3(-15, 0, 2.5), "US_Engineers")
-	_spawn_squad(us_bulldozer_data, Vector3(-20, 0, 0), "US_Bulldozer")
-	_spawn_squad(us_apc_data, Vector3(-20, 0, 5), "US_APC")
+	# Map center - map is 3000m, so center is at 1500
+	var center := Vector3(1500.0, 0.0, 1500.0)
 
-	# Spawn VC forces (enemy)
-	_spawn_squad(vc_infantry_data, Vector3(10, 0, 0), "VC_Squad_1")
-	_spawn_squad(vc_infantry_data, Vector3(10, 0, 5), "VC_Squad_2")
-	_spawn_squad(vc_infantry_data, Vector3(15, 0, 2.5), "VC_Squad_3")
+	# Spawn US forces (player controlled) - west of center
+	_spawn_squad(us_rifle_data, center + Vector3(-10, 0, 0), "US_Rifle_1")
+	_spawn_squad(us_rifle_data, center + Vector3(-10, 0, 5), "US_Rifle_2")
+	_spawn_squad(us_engineer_data, center + Vector3(-15, 0, 2.5), "US_Engineers")
+	_spawn_squad(us_bulldozer_data, center + Vector3(-20, 0, 0), "US_Bulldozer")
+	_spawn_squad(us_apc_data, center + Vector3(-20, 0, 5), "US_APC")
+
+	# Spawn VC forces (enemy) - east of center
+	_spawn_squad(vc_infantry_data, center + Vector3(30, 0, 0), "VC_Squad_1")
+	_spawn_squad(vc_infantry_data, center + Vector3(30, 0, 5), "VC_Squad_2")
+	_spawn_squad(vc_infantry_data, center + Vector3(35, 0, 2.5), "VC_Squad_3")
 
 	print("  Spawned 5 US units (green) - includes Bulldozer")
 	print("  Spawned 3 VC units (brown)")

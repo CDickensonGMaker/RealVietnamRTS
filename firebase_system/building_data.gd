@@ -178,6 +178,19 @@ enum BuildingType {
 	# FIREBASE LOGISTICS (114+)
 	# -------------------------------------------------------------------------
 	SUPPLY_DEPOT,           # 114 - Main supply storage and distribution hub
+
+	# -------------------------------------------------------------------------
+	# ADDITIONAL FIREBASE DEFENSES (115-117)
+	# -------------------------------------------------------------------------
+	TANK_TRAP,              # 115 - Anti-vehicle obstacle (Czech hedgehog style)
+	FOXHOLE,                # 116 - Individual fighting position with sandbags
+	TRENCH,                 # 117 - Linear defensive earthwork
+
+	# -------------------------------------------------------------------------
+	# SUPPLY CHAIN / LOGISTICS (118-119)
+	# -------------------------------------------------------------------------
+	TRUCK_STAGING_AREA,     # 118 - Supply convoy spawn point
+	MODULAR_BRIDGE,         # 119 - Spans water/ravines
 }
 
 # =============================================================================
@@ -264,16 +277,20 @@ enum BuildingCategory {
 @export var is_flammable: bool = false
 @export var is_explosive: bool = false
 
+## Directional Fire Arc (Weapon Emplacements)
+@export var fire_arc: float = 360.0  # Firing arc in degrees - 360 = full rotation
+@export var weapon_range: float = 0.0  # Weapon range in meters - 0 = no arc display
+@export var rotatable_post_placement: bool = false  # Can rotate after placement (artillery)
+@export var initial_facing: float = 0.0  # Facing direction set during placement (degrees)
+
 ## HQ Building (PRD Phase 4 - Firebase Influence)
 @export var is_hq_building: bool = false  ## If true, activates firebase influence radius
 @export var influence_radius: float = 150.0  ## Influence radius when this HQ is active (per PRD)
 
 ## Placement Properties
-# TODO: Implement CoH-style drag-and-paint linear placement system for sandbags/wire
-#       - LinearPlacementSystem: click start, drag to end, preview segments along line
-#       - Riflemen/Engineers can place SANDBAG_LIGHT anywhere in the field
-#       - Bulldozer required for SANDBAG_HEAVY (firebase only)
-#       - Segment spawning based on model length, terrain snapping
+## CoH-style linear placement implemented in PlacementController (firebase_system/placement_controller.gd)
+## - Click start, drag to end, preview shows segments along line with per-segment validation
+## - Workers auto-assign to build jobs via WorkerController (bottom-up job finding)
 @export var is_linear_placement: bool = false  # Can be placed in lines (sandbags, wire)
 @export var requires_bulldozer: bool = false   # Only bulldozer can place this
 @export var can_place_anywhere: bool = false   # Can be placed outside firebases (field defenses)
@@ -328,7 +345,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 
 		BuildingType.BUNKER:
 			data.display_name = "Bunker"
-			data.description = "Hardened fighting position - garrison for defensive fire"
+			data.description = "Hardened fighting position - 120-degree arc from firing ports"
 			data.category = BuildingCategory.FIREBASE_PERIMETER
 			data.supply_cost = 40
 			data.stage_work = [40.0, 60.0, 40.0]
@@ -343,6 +360,10 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.defense_weapon = "m16"  # Garrison fires rifles
 			data.defense_type = 1  # BUNKER
 			data.requires_garrison_to_fire = true  # Needs infantry
+			# Directional fire arc - fixed position after placement
+			data.fire_arc = 120.0
+			data.weapon_range = 300.0
+			data.rotatable_post_placement = false
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
 		BuildingType.SANDBAG_BUNKER:
@@ -375,7 +396,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 
 		BuildingType.MACHINE_GUN_NEST:
 			data.display_name = "MG Nest"
-			data.description = "M60 emplacement with 360-degree coverage - auto-engages enemies"
+			data.description = "M60 emplacement with 60-degree fire arc - auto-engages enemies"
 			data.category = BuildingCategory.FIREBASE_PERIMETER
 			data.supply_cost = 30
 			data.stage_work = [30.0, 40.0, 30.0]
@@ -386,6 +407,10 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.height = 1.0
 			data.auto_attacks = true
 			data.attack_range = 500.0
+			# Directional fire arc - fixed position after placement
+			data.fire_arc = 60.0
+			data.weapon_range = 500.0
+			data.rotatable_post_placement = false
 			data.defense_weapon = "m60"  # M60 machine gun
 			data.defense_type = 0  # MG_NEST
 			data.requires_garrison_to_fire = false  # Operates standalone
@@ -393,7 +418,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 
 		BuildingType.MORTAR_PIT:
 			data.display_name = "Mortar Pit"
-			data.description = "81mm mortar position - indirect fire support, auto-engages enemies"
+			data.description = "81mm mortar position - 90-degree arc, indirect fire support"
 			data.category = BuildingCategory.FIREBASE_PERIMETER
 			data.supply_cost = 35
 			data.stage_work = [30.0, 50.0, 30.0]
@@ -403,9 +428,13 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.height = 1.0
 			data.auto_attacks = true
 			data.attack_range = 3500.0
-			data.defense_weapon = "m29_mortar"  # 81mm mortar
+			data.defense_weapon = "mortar_81mm"  # 81mm mortar
 			data.defense_type = 2  # MORTAR_PIT
 			data.requires_garrison_to_fire = true  # Needs crew to operate
+			# Directional fire arc - fixed position after placement
+			data.fire_arc = 90.0
+			data.weapon_range = 3500.0
+			data.rotatable_post_placement = false
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
 
 		BuildingType.WIRE_OBSTACLE:
@@ -423,6 +452,9 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.damages_enemies = true
 			data.damage_to_enemies = 2.0
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
+			data.is_linear_placement = true
+			data.can_place_anywhere = true
+			data.requires_cleared_terrain = false
 
 		BuildingType.TRIPLE_CONCERTINA:
 			data.display_name = "Triple Concertina"
@@ -439,6 +471,9 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.damages_enemies = true
 			data.damage_to_enemies = 4.0
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
+			data.is_linear_placement = true
+			data.can_place_anywhere = true
+			data.requires_cleared_terrain = false
 
 		BuildingType.CLAYMORE_LINE:
 			data.display_name = "Claymore Mines"
@@ -452,10 +487,13 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.provides_cover = false
 			data.is_explosive = true
 			data.destruction_states = [DestructionState.INTACT, DestructionState.EXPLODED]
+			data.is_linear_placement = true
+			data.can_place_anywhere = true
+			data.requires_cleared_terrain = false
 
 		BuildingType.WATCHTOWER:
 			data.display_name = "Watchtower"
-			data.description = "Extended vision, sniper position"
+			data.description = "Extended vision, sniper position - auto-engages enemies"
 			data.category = BuildingCategory.FIREBASE_PERIMETER
 			data.supply_cost = 25
 			data.stage_work = [30.0, 40.0, 30.0]
@@ -465,6 +503,11 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.footprint_size = Vector2(2, 2)
 			data.height = 4.0
 			data.is_flammable = true
+			data.auto_attacks = true
+			data.attack_range = 400.0
+			data.defense_weapon = "m14"  # Accurate rifle for sniping
+			data.defense_type = 3  # WATCHTOWER
+			data.requires_garrison_to_fire = true  # Needs garrison to fire
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.BURNED]
 
 		# =====================================================================
@@ -570,19 +613,21 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 
 		BuildingType.TOC:
 			data.display_name = "TOC"
-			data.description = "Tactical Operations Center - firebase headquarters. Activates firebase influence radius."
+			data.description = "Tactical Operations Center - can be placed anywhere to establish a new firebase. Creates 150m influence zone."
 			data.category = BuildingCategory.FIREBASE_SUPPORT
 			data.supply_cost = 80
 			data.stage_work = [60.0, 80.0, 60.0]
 			data.health = 500.0
 			data.armor = 10.0
 			data.sight_range = 100.0
-			data.requires_firebase_level = 1
+			data.requires_firebase_level = 0  # TOC starts a firebase, doesn't require one
 			data.footprint_size = Vector2(6, 4)
 			data.height = 2.5
 			data.construction_slots = 2
 			data.is_hq_building = true  # PRD Phase 4: Activates firebase
 			data.influence_radius = 150.0  # Per PRD: 150m influence radius
+			data.can_place_anywhere = true  # TOC can be placed anywhere to start a new firebase
+			data.requires_cleared_terrain = false  # Will need clearing around it, but can initiate anywhere
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
 		BuildingType.COMMO_BUNKER:
@@ -700,7 +745,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 		# =====================================================================
 		BuildingType.ARTILLERY_PIT:
 			data.display_name = "Artillery Pit"
-			data.description = "105mm howitzer emplacement"
+			data.description = "105mm howitzer emplacement - 360-degree rotation, long range fire support"
 			data.category = BuildingCategory.FIREBASE_HEAVY
 			data.supply_cost = 100
 			data.stage_work = [60.0, 100.0, 60.0]
@@ -712,11 +757,18 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.construction_slots = 2
 			data.auto_attacks = true
 			data.attack_range = 11000.0
+			data.defense_weapon = "m102_howitzer"  # 105mm howitzer
+			data.defense_type = 4  # ARTILLERY
+			data.requires_garrison_to_fire = true  # Needs crew to operate
+			# Full 360-degree rotation - can rotate post-placement
+			data.fire_arc = 360.0
+			data.weapon_range = 11000.0
+			data.rotatable_post_placement = true
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
 		BuildingType.HOWITZER_PIT_105MM:
 			data.display_name = "105mm Howitzer Pit"
-			data.description = "Circular sandbagged emplacement for M102 howitzer"
+			data.description = "Circular sandbagged emplacement - 360-degree rotation"
 			data.category = BuildingCategory.FIREBASE_HEAVY
 			data.supply_cost = 90
 			data.stage_work = [55.0, 90.0, 55.0]
@@ -728,11 +780,15 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.construction_slots = 2
 			data.auto_attacks = true
 			data.attack_range = 11000.0
+			# Full 360-degree rotation - can rotate post-placement
+			data.fire_arc = 360.0
+			data.weapon_range = 11000.0
+			data.rotatable_post_placement = true
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
 
 		BuildingType.HOWITZER_PIT_155MM:
 			data.display_name = "155mm Howitzer Pit"
-			data.description = "Large artillery position for M114 howitzer"
+			data.description = "Large artillery position - 360-degree rotation, 14.6km range"
 			data.category = BuildingCategory.FIREBASE_HEAVY
 			data.supply_cost = 120
 			data.stage_work = [70.0, 120.0, 70.0]
@@ -744,6 +800,10 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.construction_slots = 2
 			data.auto_attacks = true
 			data.attack_range = 14600.0
+			# Full 360-degree rotation - can rotate post-placement
+			data.fire_arc = 360.0
+			data.weapon_range = 14600.0
+			data.rotatable_post_placement = true
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
 
 		BuildingType.FIRE_DIRECTION_CENTER:
@@ -1915,6 +1975,89 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.construction_slots = 2
 			data.is_flammable = true
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.BURNED, DestructionState.DESTROYED]
+
+		# =====================================================================
+		# ADDITIONAL FIREBASE DEFENSES
+		# =====================================================================
+		BuildingType.TANK_TRAP:
+			data.display_name = "Tank Trap"
+			data.description = "Anti-vehicle obstacle - blocks armor and slows vehicles"
+			data.category = BuildingCategory.FIREBASE_PERIMETER
+			data.supply_cost = 8
+			data.stage_work = [10.0, 15.0, 10.0]
+			data.health = 150.0
+			data.armor = 20.0  # Steel construction
+			data.footprint_size = Vector2(2, 2)
+			data.height = 1.5
+			data.blocks_vehicles = true
+			data.is_linear_placement = true
+			data.requires_cleared_terrain = false
+			data.can_place_anywhere = true
+			data.destruction_states = [DestructionState.INTACT, DestructionState.DESTROYED]
+
+		BuildingType.FOXHOLE:
+			data.display_name = "Foxhole"
+			data.description = "Individual fighting position with sandbag cover"
+			data.category = BuildingCategory.FIREBASE_PERIMETER
+			data.supply_cost = 15
+			data.stage_work = [15.0, 20.0, 10.0]
+			data.health = 100.0
+			data.garrison_capacity = 2
+			data.provides_cover = true
+			data.cover_value = 0.6
+			data.footprint_size = Vector2(2, 2)
+			data.height = 0.8
+			data.is_linear_placement = true
+			data.requires_cleared_terrain = false
+			data.can_place_anywhere = true
+			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
+
+		BuildingType.TRENCH:
+			data.display_name = "Trench"
+			data.description = "Linear defensive earthwork - provides cover along its length. Requires firebase zone."
+			data.category = BuildingCategory.FIREBASE_PERIMETER
+			data.supply_cost = 12
+			data.stage_work = [15.0, 25.0, 15.0]
+			data.health = 200.0
+			data.provides_cover = true
+			data.cover_value = 0.7
+			data.footprint_size = Vector2(4, 2)
+			data.height = 1.0
+			data.is_linear_placement = true
+			data.requires_bulldozer = false
+			data.can_place_anywhere = false  # Firebase Defense - requires TOC zone
+			data.requires_cleared_terrain = true
+			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
+
+		# =====================================================================
+		# SUPPLY CHAIN / LOGISTICS
+		# =====================================================================
+		BuildingType.TRUCK_STAGING_AREA:
+			data.display_name = "Truck Staging Area"
+			data.description = "Supply convoy spawn point - trucks depart from here on supply runs"
+			data.category = BuildingCategory.FIREBASE_SUPPORT
+			data.supply_cost = 60
+			data.stage_work = [40.0, 50.0, 40.0]
+			data.health = 150.0
+			data.footprint_size = Vector2(10, 8)
+			data.height = 2.0
+			data.requires_cleared_terrain = true
+			data.can_place_anywhere = false
+			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
+
+		BuildingType.MODULAR_BRIDGE:
+			data.display_name = "Modular Bridge"
+			data.description = "Connects areas over water or ravines - enables road network expansion"
+			data.category = BuildingCategory.INFRASTRUCTURE
+			data.supply_cost = 100
+			data.stage_work = [60.0, 100.0, 60.0]
+			data.health = 500.0
+			data.armor = 10.0
+			data.footprint_size = Vector2(6, 14)
+			data.height = 3.0
+			data.requires_cleared_terrain = false
+			data.can_place_anywhere = false
+			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
 	return data
 

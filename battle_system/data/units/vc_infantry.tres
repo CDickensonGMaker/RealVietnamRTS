@@ -19,3 +19,4 @@ stealth_rating = 0.3
 can_build = false
 can_capture = false
 is_vehicle = false
+model_rotation_y = 180.0

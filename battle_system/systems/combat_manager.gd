@@ -12,6 +12,7 @@ signal combat_started(attacker: Node, defender: Node)
 signal damage_dealt(target: Node, amount: float, source: Node, weapon: String)
 signal unit_suppressed(target: Node, amount: float)
 signal unit_killed(target: Node, killer: Node)
+signal ammo_depleted(unit: Node)  ## Emitted when a unit runs out of ammo
 
 ## Combat constants
 const HIT_CHANCE_BASE: float = 0.7
@@ -52,6 +53,99 @@ var _total_hits: int = 0
 var _total_damage: float = 0.0
 
 
+# =============================================================================
+# AMMO SYSTEM
+# =============================================================================
+
+## Check if a unit has sufficient ammo to fire a weapon.
+## Returns true if unit can fire, false if ammo depleted.
+func has_sufficient_ammo(unit: Node, weapon_id: String) -> bool:
+	# Get ammo cost for this weapon
+	var ammo_cost: int = get_ammo_cost(weapon_id)
+
+	# Check if unit has ammo tracking
+	if not unit.has_method("get"):
+		return true  # Units without ammo tracking can always fire
+
+	var current_ammo: int = unit.get("current_ammo") if unit.get("current_ammo") != null else -1
+
+	# -1 means no ammo tracking (unlimited)
+	if current_ammo < 0:
+		return true
+
+	return current_ammo >= ammo_cost
+
+
+## Get ammo cost for a weapon based on its fire pattern.
+## Returns the number of rounds consumed per fire action.
+func get_ammo_cost(weapon_id: String) -> int:
+	var weapon: RefCounted = VietnamWeaponDataScript.get_weapon(weapon_id)
+	if not weapon:
+		return 1
+
+	match weapon.fire_pattern:
+		VietnamWeaponDataScript.FirePattern.SINGLE:
+			return 1
+		VietnamWeaponDataScript.FirePattern.BURST:
+			return weapon.burst_count if weapon.get("burst_count") else 3
+		VietnamWeaponDataScript.FirePattern.AUTO:
+			# Auto fire: rounds per second, capped at 10 per call
+			var rounds_per_second: float = weapon.rate_of_fire / 60.0
+			return mini(int(rounds_per_second), 10)
+		VietnamWeaponDataScript.FirePattern.VOLLEY:
+			return 1
+		VietnamWeaponDataScript.FirePattern.STAGGER:
+			return 3  # 3-round stagger
+		_:
+			return 1
+
+
+## Consume ammo from a unit for firing.
+## Returns true if ammo was consumed, false if insufficient ammo.
+func consume_ammo(unit: Node, weapon_id: String) -> bool:
+	var ammo_cost: int = get_ammo_cost(weapon_id)
+
+	# Check if unit has ammo tracking
+	if not unit.has_method("get"):
+		return true
+
+	var current_ammo: int = unit.get("current_ammo") if unit.get("current_ammo") != null else -1
+
+	# -1 means no ammo tracking
+	if current_ammo < 0:
+		return true
+
+	# Insufficient ammo
+	if current_ammo < ammo_cost:
+		_handle_ammo_depleted(unit)
+		return false
+
+	# Consume ammo - use set() if available, otherwise direct assignment
+	var new_ammo: int = current_ammo - ammo_cost
+	if unit.has_method("set"):
+		unit.set("current_ammo", new_ammo)
+
+	# Check if now depleted
+	if new_ammo <= 0:
+		_handle_ammo_depleted(unit)
+
+	return true
+
+
+## Handle ammo depletion for a unit.
+func _handle_ammo_depleted(unit: Node) -> void:
+	# Emit local signal
+	ammo_depleted.emit(unit)
+
+	# Emit global signal via BattleSignals
+	if BattleSignals and BattleSignals.has_signal("unit_ammo_depleted"):
+		BattleSignals.unit_ammo_depleted.emit(unit)
+
+	# Trigger unit's own out_of_ammo signal if it has one
+	if unit.has_signal("out_of_ammo"):
+		unit.out_of_ammo.emit()
+
+
 func _ready() -> void:
 	# Create projectile pool
 	projectile_pool = ProjectilePoolScript.new()
@@ -65,11 +159,16 @@ func _ready() -> void:
 
 
 ## Fire a weapon from attacker at target.
-func fire_weapon(attacker: Node, target: Node, weapon_id: String) -> void:
+## Returns false if unit cannot fire (no ammo), true if firing occurred.
+func fire_weapon(attacker: Node, target: Node, weapon_id: String) -> bool:
 	var weapon: RefCounted = VietnamWeaponDataScript.get_weapon(weapon_id)
 	if not weapon:
 		push_warning("[CombatManager] Unknown weapon: %s" % weapon_id)
-		return
+		return false
+
+	# Consume ammo - this checks for sufficient ammo and handles depletion
+	if not consume_ammo(attacker, weapon_id):
+		return false
 
 	# Get attacker faction
 	var attacker_faction: int = 0
@@ -98,6 +197,8 @@ func fire_weapon(attacker: Node, target: Node, weapon_id: String) -> void:
 	combat_started.emit(attacker, target)
 	if BattleSignals:
 		BattleSignals.unit_attacked.emit(attacker, target, weapon_id)
+
+	return true
 
 
 func _fire_single(attacker: Node, target: Node, target_pos: Vector3,

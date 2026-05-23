@@ -13,8 +13,9 @@ extends Camera3D
 @export var center_lerp_speed: float = 5.0
 
 ## Camera boundary limits - prevents camera from going too far outside playable area
-@export var map_bounds_min: Vector3 = Vector3(-100, 0, -100)
-@export var map_bounds_max: Vector3 = Vector3(100, 100, 100)
+## Default to 3000m map size (can be overridden via set_map_bounds)
+@export var map_bounds_min: Vector3 = Vector3(0, 0, 0)
+@export var map_bounds_max: Vector3 = Vector3(3000, 500, 3000)
 
 ## Edge scrolling
 @export var edge_scroll_enabled: bool = true

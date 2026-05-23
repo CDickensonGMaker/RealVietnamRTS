@@ -8,7 +8,7 @@ extends Node
 ## - POLYLINE: Click points to form a path for line jobs (Road)
 ## - SINGLE: Single click for point jobs (Build, FillCrater)
 
-const JobTypes = preload("res://firebase_system/jobs/job_types.gd")
+const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
 
 ## Signals
 signal area_painted(min_corner: Vector3, max_corner: Vector3)
@@ -35,7 +35,7 @@ var current_position: Vector3 = Vector3.ZERO
 var polyline_points: PackedVector3Array = PackedVector3Array()
 
 ## Associated job type (for visual feedback)
-var current_job_type: JobTypes.JobType = JobTypes.JobType.CLEAR_TERRAIN
+var current_job_type: UnifiedJob.Type = UnifiedJob.Type.CLEAR_TERRAIN
 
 ## Minimum drag distance to register as an area (prevents accidental tiny areas)
 const MIN_DRAG_DISTANCE := 2.0
@@ -231,7 +231,7 @@ func _cancel() -> void:
 
 
 ## Activate the controller for a specific input mode
-func activate(mode: InputMode, job_type: JobTypes.JobType = JobTypes.JobType.CLEAR_TERRAIN) -> void:
+func activate(mode: InputMode, job_type: UnifiedJob.Type = UnifiedJob.Type.CLEAR_TERRAIN) -> void:
 	input_mode = mode
 	current_job_type = job_type
 	is_painting = false

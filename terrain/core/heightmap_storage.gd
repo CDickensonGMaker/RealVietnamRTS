@@ -47,21 +47,33 @@ func init_flat(height: float = 0.5) -> void:
 func get_cell(x: int, z: int) -> float:
 	if x < 0 or x >= size or z < 0 or z >= size:
 		return 0.0
-	return data[z * size + x]
+	var idx: int = z * size + x
+	# Safety check: validate actual array bounds (in case size doesn't match data.size())
+	if idx < 0 or idx >= data.size():
+		return 0.0
+	return data[idx]
 
 
 ## Set height at cell coordinates
 func set_cell(x: int, z: int, value: float) -> void:
 	if x < 0 or x >= size or z < 0 or z >= size:
 		return
-	data[z * size + x] = clampf(value, 0.0, 1.0)
+	var idx: int = z * size + x
+	# Safety check: validate actual array bounds
+	if idx < 0 or idx >= data.size():
+		return
+	data[idx] = clampf(value, 0.0, 1.0)
 
 
 ## Get height at world position with bilinear interpolation
 func sample_world(world_x: float, world_z: float) -> float:
 	var fx: float = world_x / cell_size
 	var fz: float = world_z / cell_size
-	return sample_bilinear(fx, fz) * height_scale
+	var result: float = sample_bilinear(fx, fz) * height_scale
+	# Final safety clamp to prevent terrain spikes
+	if is_nan(result) or is_inf(result) or result > height_scale * 1.5:
+		return height_scale * 0.5  # Return mid-height as safe default
+	return result
 
 
 ## Bilinear interpolation at cell coordinates (fractional)
@@ -75,11 +87,23 @@ func sample_bilinear(fx: float, fz: float) -> float:
 	x = clampi(x, 0, size - 2)
 	z = clampi(z, 0, size - 2)
 
-	# Get 4 corners
+	# Get 4 corners with NaN protection
 	var h00: float = data[z * size + x]
 	var h10: float = data[z * size + x + 1]
 	var h01: float = data[(z + 1) * size + x]
 	var h11: float = data[(z + 1) * size + x + 1]
+
+	# NaN checks - use default height if any corner is invalid
+	if is_nan(h00) or is_inf(h00): h00 = 0.5
+	if is_nan(h10) or is_inf(h10): h10 = 0.5
+	if is_nan(h01) or is_inf(h01): h01 = 0.5
+	if is_nan(h11) or is_inf(h11): h11 = 0.5
+
+	# Clamp to valid range (normalized heights should be 0-1)
+	h00 = clampf(h00, 0.0, 1.0)
+	h10 = clampf(h10, 0.0, 1.0)
+	h01 = clampf(h01, 0.0, 1.0)
+	h11 = clampf(h11, 0.0, 1.0)
 
 	# Bilinear interpolation
 	var h0: float = lerpf(h00, h10, dx)

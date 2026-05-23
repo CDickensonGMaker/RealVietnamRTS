@@ -5,6 +5,9 @@ class_name ProjectilePool extends Node
 
 const ProjectileScript = preload("res://battle_system/combat/projectile.gd")
 const VietnamWeaponDataScript = preload("res://battle_system/data/vietnam_weapon_data.gd")
+const MuzzleFlashScript = preload("res://battle_system/effects/muzzle_flash.gd")
+const CombatAudioScript = preload("res://battle_system/audio/combat_audio.gd")
+const ImpactEffectsScript = preload("res://battle_system/effects/impact_effects.gd")
 
 ## Pool settings
 const INITIAL_POOL_SIZE: int = 100
@@ -20,8 +23,22 @@ var _pool_parent: Node3D = null
 var _total_fired: int = 0
 var _pool_misses: int = 0
 
+## Audio system
+var _combat_audio: Node = null
+
+## Impact effects system
+var _impact_effects: Node = null
+
 
 func _ready() -> void:
+	# Create combat audio system
+	_combat_audio = CombatAudioScript.new()
+	_combat_audio.name = "CombatAudio"
+	add_child(_combat_audio)
+	# Create impact effects system
+	_impact_effects = ImpactEffectsScript.new()
+	_impact_effects.name = "ImpactEffects"
+	add_child(_impact_effects)
 	# Create pool parent node
 	_pool_parent = Node3D.new()
 	_pool_parent.name = "ProjectilePool"
@@ -77,6 +94,10 @@ func fire(config: Dictionary) -> Node3D:
 			push_warning("[ProjectilePool] Pool exhausted at max size!")
 			return null
 
+	# Set impact effects reference
+	if proj.has_method("set") and "impact_effects" in proj:
+		proj.impact_effects = _impact_effects
+
 	# Fire the projectile
 	if proj.has_method("fire"):
 		proj.fire(config)
@@ -97,9 +118,16 @@ func fire_weapon(weapon_id: String, source: Node, target_pos: Vector3,
 	if not weapon:
 		return null
 
+	# Spawn muzzle flash and play sound
+	var muzzle_pos: Vector3 = source.global_position + Vector3(0, 1.0, 0)
+	if weapon.muzzle_flash:
+		MuzzleFlashScript.spawn_for_weapon(_pool_parent, muzzle_pos, weapon.category)
+	if _combat_audio:
+		_combat_audio.play_fire(muzzle_pos, weapon_id)
+
 	# Build fire config
 	var config := {
-		"start_position": source.global_position + Vector3(0, 1.0, 0),  # Muzzle height
+		"start_position": muzzle_pos,
 		"target_position": target_pos,
 		"source": source,
 		"source_faction": source_faction,
@@ -123,6 +151,66 @@ func fire_weapon(weapon_id: String, source: Node, target_pos: Vector3,
 		"scatter_angle": weapon.scatter_angle,
 		"weapon_category": weapon.category,
 		"is_tracer": weapon.tracer_ratio > 0 and (_total_fired % weapon.tracer_ratio == 0),
+
+		# Rocket motor properties
+		"rocket_thrust": weapon.rocket_thrust,
+		"rocket_burn_time": weapon.rocket_burn_time,
+	}
+
+	return fire(config)
+
+
+## Fire a weapon with source velocity (for bombs/napalm dropped from moving aircraft).
+func fire_weapon_with_velocity(weapon_id: String, source: Node, target_pos: Vector3,
+		source_faction: int = 0, source_velocity: Vector3 = Vector3.ZERO,
+		target_node: Node = null) -> Node3D:
+	var weapon_config := VietnamWeaponDataScript.get_projectile_config(weapon_id)
+	if weapon_config.is_empty():
+		push_warning("[ProjectilePool] Unknown weapon: %s" % weapon_id)
+		return null
+
+	var weapon := VietnamWeaponDataScript.get_weapon(weapon_id)
+	if not weapon:
+		return null
+
+	# Spawn muzzle flash and play sound (bombs typically don't have muzzle flash)
+	var muzzle_pos: Vector3 = source.global_position + Vector3(0, 1.0, 0)
+	if weapon.muzzle_flash:
+		MuzzleFlashScript.spawn_for_weapon(_pool_parent, muzzle_pos, weapon.category)
+	if _combat_audio:
+		_combat_audio.play_fire(muzzle_pos, weapon_id)
+
+	# Build fire config with source velocity
+	var config := {
+		"start_position": muzzle_pos,
+		"target_position": target_pos,
+		"source": source,
+		"source_faction": source_faction,
+		"target_node": target_node,
+		"source_velocity": source_velocity,  # Aircraft velocity for bomb physics
+
+		# From weapon data
+		"speed": weapon.projectile_speed,
+		"lifetime": weapon.lifetime,
+		"trajectory": weapon.trajectory,
+		"arc_height": weapon.arc_height,
+		"damage": weapon.damage,
+		"damage_type": weapon.damage_type,
+		"aoe_radius": weapon.aoe_radius,
+		"aoe_falloff": weapon.aoe_falloff,
+		"suppression": weapon.suppression,
+		"suppression_radius": weapon.suppression_radius,
+		"max_pierces": weapon.max_pierces,
+		"pierce_falloff": weapon.pierce_falloff,
+		"armor_penetration": weapon.armor_penetration,
+		"anti_vehicle_bonus": weapon.anti_vehicle_bonus,
+		"scatter_angle": weapon.scatter_angle,
+		"weapon_category": weapon.category,
+		"is_tracer": false,  # Bombs don't have tracers
+
+		# Rocket motor properties
+		"rocket_thrust": weapon.rocket_thrust,
+		"rocket_burn_time": weapon.rocket_burn_time,
 	}
 
 	return fire(config)

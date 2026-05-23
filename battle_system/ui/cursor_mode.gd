@@ -26,6 +26,12 @@ enum Mode {
 	PAINT_FILL,       # Filling crater (single click)
 	# Bulldozer-specific modes
 	PAINT_DOZER_LINE, # Bulldozer 3-wide straight line clearing
+	# Linear placement modes (drag start to end)
+	PAINT_TRENCH,     # Paint trench line
+	PAINT_WIRE,       # Paint wire obstacle line
+	# Standing order modes
+	PATROL,           # Set patrol waypoints for units
+	REPAIR,           # Target structure for repair
 }
 
 
@@ -53,6 +59,10 @@ static func get_mode_name(mode: int) -> String:
 		Mode.PAINT_BUILD: return "PLACE BUILDING"
 		Mode.PAINT_FILL: return "FILL CRATER"
 		Mode.PAINT_DOZER_LINE: return "DOZER LINE"
+		Mode.PAINT_TRENCH: return "DIG TRENCH"
+		Mode.PAINT_WIRE: return "LAY WIRE"
+		Mode.PATROL: return "PATROL"
+		Mode.REPAIR: return "REPAIR"
 		_: return "UNKNOWN"
 
 
@@ -68,7 +78,8 @@ static func shows_overlay(mode: int) -> bool:
 		Mode.UNLOAD, Mode.BOMB_RUN, Mode.NAPALM_RUN, Mode.ROCKET_RUN, \
 		Mode.STRAFE_RUN, Mode.BUILDING_PLACE, Mode.GARRISON, \
 		Mode.PAINT_CLEAR, Mode.PAINT_FLATTEN, Mode.PAINT_ROAD, \
-		Mode.PAINT_BUILD, Mode.PAINT_FILL, Mode.PAINT_DOZER_LINE:
+		Mode.PAINT_BUILD, Mode.PAINT_FILL, Mode.PAINT_DOZER_LINE, \
+		Mode.PAINT_TRENCH, Mode.PAINT_WIRE, Mode.PATROL, Mode.REPAIR:
 			return true
 		_:
 			return false
@@ -78,7 +89,8 @@ static func shows_overlay(mode: int) -> bool:
 static func is_paint_mode(mode: int) -> bool:
 	match mode:
 		Mode.PAINT_CLEAR, Mode.PAINT_FLATTEN, Mode.PAINT_ROAD, \
-		Mode.PAINT_BUILD, Mode.PAINT_FILL, Mode.PAINT_DOZER_LINE:
+		Mode.PAINT_BUILD, Mode.PAINT_FILL, Mode.PAINT_DOZER_LINE, \
+		Mode.PAINT_TRENCH, Mode.PAINT_WIRE:
 			return true
 		_:
 			return false
@@ -93,8 +105,18 @@ static func canceled_by_escape(mode: int) -> bool:
 static func right_click_commits(mode: int) -> bool:
 	match mode:
 		Mode.FIRE_MISSION, Mode.UNLOAD, Mode.BOMB_RUN, Mode.NAPALM_RUN, \
-		Mode.ROCKET_RUN, Mode.STRAFE_RUN, Mode.BUILDING_PLACE, Mode.GARRISON, \
-		Mode.PAINT_CLEAR, Mode.PAINT_DOZER_LINE:
+		Mode.ROCKET_RUN, Mode.STRAFE_RUN, Mode.GARRISON, \
+		Mode.PAINT_CLEAR, Mode.PAINT_DOZER_LINE, Mode.PATROL, Mode.REPAIR:
+			return true
+		_:
+			return false
+
+
+## Returns true if left-click commits the action in this mode
+## (Building placement is more intuitive with left-click)
+static func left_click_commits(mode: int) -> bool:
+	match mode:
+		Mode.BUILDING_PLACE, Mode.PAINT_BUILD:
 			return true
 		_:
 			return false

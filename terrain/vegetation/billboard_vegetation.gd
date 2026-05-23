@@ -4,9 +4,19 @@ class_name BillboardVegetation
 ## Uses 5 intersecting quads (cross/star formation) for 3D depth illusion
 ## Provides LOD between full 3D trees and distant fog
 
-const BILLBOARD_RANGE_MIN := 80.0   # Start showing billboards
-const BILLBOARD_RANGE_MAX := 800.0  # Stop showing billboards (extended range, no fog)
-const BILLBOARDS_PER_CHUNK := 6000  # High candidate pool - most filtered by terrain type
+## Billboard LOD distances - billboards fill in the "jungle edge" beyond 3D trees
+## 3D trees: visible 0-200m, hidden >250m (VegetationLODManager)
+## Billboards: visible 150-1500m (overlap prevents gaps during camera movement)
+const DEFAULT_BILLBOARD_RANGE_MIN := 150.0  # Start showing where 3D trees begin fading
+const DEFAULT_BILLBOARD_RANGE_MAX := 1500.0 # Extended range for large maps
+const DEFAULT_BILLBOARDS_PER_CHUNK := 4500  # Default for full game
+
+## Configurable billboard count per chunk (set before generation for test scenes)
+var billboards_per_chunk: int = DEFAULT_BILLBOARDS_PER_CHUNK
+
+## Configurable LOD distances (set before generation for smaller test maps)
+var billboard_range_min: float = DEFAULT_BILLBOARD_RANGE_MIN
+var billboard_range_max: float = DEFAULT_BILLBOARD_RANGE_MAX
 
 # Per-tier acceptance rates for billboards (0=CLEAR to 5=HEAVY_JUNGLE)
 const TIER_ACCEPT := {
@@ -45,6 +55,7 @@ var _chunk_placements: Dictionary = {}
 # Reference to terrain system
 var _terrain_manager: Node
 var _vegetation_manager: Node
+var _terrain_grid: RefCounted  # For clearing stage checks
 var _camera: Camera3D
 
 # Chunk size
@@ -88,6 +99,10 @@ func set_terrain_manager(manager: Node) -> void:
 
 func set_vegetation_manager(veg_manager: Node) -> void:
 	_vegetation_manager = veg_manager
+
+
+func set_terrain_grid(grid: RefCounted) -> void:
+	_terrain_grid = grid
 
 
 func set_camera(cam: Camera3D) -> void:
@@ -254,7 +269,7 @@ func _build_placements(coord: Vector2i, heightmap: Object) -> void:
 	var world_offset_z := coord.y * _chunk_size
 	var bundles_per_side := int(_chunk_size / 8.0)
 
-	for i in BILLBOARDS_PER_CHUNK:
+	for i in billboards_per_chunk:
 		var local_x := rng.randf() * _chunk_size
 		var local_z := rng.randf() * _chunk_size
 		var world_x := world_offset_x + local_x
@@ -301,20 +316,36 @@ func _materialize_chunk(coord: Vector2i, vegetation_terrain: PackedByteArray) ->
 	var transforms_by_mesh: Dictionary = {}  # For trees (jungle terrain)
 	var rice_transforms_by_mesh: Dictionary = {}  # For rice (paddy terrain)
 
+	var skipped_by_clearing := 0
+	var skipped_by_terrain := 0
+	var skipped_by_roll := 0
+
 	for p in placements:
 		var bundle_idx: int = p.bundle_z * bundles_per_side + p.bundle_x
 		if bundle_idx >= vegetation_terrain.size():
 			continue
+
+		# Check clearing stage - skip billboards in cleared/fortified areas
+		# ClearingState.Stage: JUNGLE=0, PARTIALLY_CLEARED=1, CLEARED=2, FORTIFIED=3
+		if _terrain_grid:
+			var pos: Vector3 = p.position
+			var clearing_stage: int = _terrain_grid.get_clearing_stage(pos)
+			if clearing_stage >= 2:  # CLEARED or FORTIFIED - no vegetation
+				skipped_by_clearing += 1
+				continue
+
 		var terrain_type: int = vegetation_terrain[bundle_idx]
 
 		# Get base acceptance rate for this terrain tier
 		var accept: float = TIER_ACCEPT.get(terrain_type, 0.0)
 		if accept <= 0.0:
+			skipped_by_terrain += 1
 			continue
 
 		# Modulate acceptance by clump factor for organic thickets/gaps
 		var modulated: float = accept * (0.35 + 1.3 * p.clump)  # range ~0.35x..1.65x base
 		if p.accept_roll > modulated:
+			skipped_by_roll += 1
 			continue
 
 		var t := Transform3D.IDENTITY
@@ -343,6 +374,10 @@ func _materialize_chunk(coord: Vector2i, vegetation_terrain: PackedByteArray) ->
 
 	var total_count := tree_count + rice_count
 	if total_count == 0:
+		if skipped_by_clearing > 0 or skipped_by_terrain > 0:
+			print("[BillboardVegetation] Chunk %s: 0 billboards (skipped: %d by clearing, %d by terrain, %d by roll)" % [
+				coord, skipped_by_clearing, skipped_by_terrain, skipped_by_roll
+			])
 		return
 
 	# Create a container for this chunk's billboards
@@ -456,9 +491,9 @@ func _update_billboard_visibility() -> void:
 
 		# Show billboards in the mid-distance range
 		# Near: 3D trees visible (handled by vegetation_manager)
-		# Mid: Billboards visible
+		# Mid: Billboards visible (creates "jungle edge" illusion)
 		# Far: Fog + terrain shader takes over
-		container.visible = dist >= BILLBOARD_RANGE_MIN and dist < BILLBOARD_RANGE_MAX
+		container.visible = dist >= billboard_range_min and dist < billboard_range_max
 
 
 ## Get billboard instance count for performance monitoring

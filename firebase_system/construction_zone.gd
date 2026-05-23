@@ -142,7 +142,7 @@ const BUILDING_MODELS: Dictionary = {
 	# VC/NVA SPECIAL
 	# =========================================================================
 	BuildingData.BuildingType.TUNNEL_ENTRANCE_HIDDEN: "res://assets/models/structures/vc_nva/tunnel_entrance_hidden.glb",
-	BuildingData.BuildingType.TUNNEL_ENTRANCE_EXPOSED: "res://assets/models/structures/vc_nva/tunnel_exposed.glb",
+	BuildingData.BuildingType.TUNNEL_ENTRANCE_EXPOSED: "res://assets/models/structures/vc_nva/tunnel_entrance_hidden.glb",  # Reuses hidden model
 	BuildingData.BuildingType.SPIDER_HOLE: "res://assets/models/structures/vc_nva/spider_hole.glb",
 	BuildingData.BuildingType.PUNJI_PIT: "res://assets/models/structures/vc_nva/punji_pit.glb",
 	BuildingData.BuildingType.UNDERGROUND_HOSPITAL: "res://assets/models/structures/vc_nva/underground_hospital.glb",
@@ -185,6 +185,13 @@ const BUILDING_MODELS: Dictionary = {
 	# FIREBASE LOGISTICS
 	# =========================================================================
 	BuildingData.BuildingType.SUPPLY_DEPOT: "res://assets/models/structures/us/us_supply_depot.glb",
+
+	# =========================================================================
+	# ADDITIONAL FIREBASE DEFENSES
+	# =========================================================================
+	BuildingData.BuildingType.TANK_TRAP: "res://assets/models/structures/converted/tank_trap.glb",
+	BuildingData.BuildingType.FOXHOLE: "res://assets/models/structures/firebase/foxhole_sandbags.glb",
+	BuildingData.BuildingType.TRENCH: "res://assets/models/structures/firebase/trench_modular.glb",
 }
 
 ## Configuration

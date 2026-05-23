@@ -117,6 +117,10 @@ class WeaponDef extends RefCounted:
 	var magazine_size: int = 20         # Rounds before reload
 	var ammo_type: String = "5.56mm"    # For supply system
 
+	# Rocket motor (for rockets only)
+	var rocket_thrust: float = 40.0     # Acceleration while burning (m/s²)
+	var rocket_burn_time: float = 1.2   # Motor burn duration (seconds)
+
 
 ## All weapon definitions, keyed by weapon ID.
 static var DEFINITIONS: Dictionary = {}
@@ -283,7 +287,7 @@ static func _init_definitions() -> void:
 	m72.weapon_name = "M72 LAW"
 	m72.category = WeaponCategory.ROCKET_LAUNCHER
 	m72.fire_pattern = FirePattern.SINGLE
-	m72.trajectory = Trajectory.FLAT
+	m72.trajectory = Trajectory.ARCING  # Rockets use thrust physics
 	m72.damage_type = DamageType.ARMOR_PIERCING
 	m72.fear_type = GameEnums.FearType.MORTAR  # Rocket explosion
 	m72.rate_of_fire = 0.5  # Disposable
@@ -300,13 +304,15 @@ static func _init_definitions() -> void:
 	m72.suppression_near_miss = 30.0
 	m72.suppression_radius = 6.0
 	m72.aoe_radius = 3.0  # Small blast
-	m72.projectile_speed = 150.0
+	m72.projectile_speed = 30.0  # Initial speed, then accelerates
 	m72.armor_penetration = 200.0  # Can defeat most armor
 	m72.anti_vehicle_bonus = 2.0
 	m72.magazine_size = 1
 	m72.ammo_type = "66mm_heat"
 	m72.sound_profile = "rocket"
 	m72.accuracy_variance = 0.2  # Unguided rocket - significant variance
+	m72.rocket_thrust = 80.0  # Strong acceleration
+	m72.rocket_burn_time = 0.8  # Short burn
 	DEFINITIONS["m72_law"] = m72
 
 	# ========================================
@@ -431,7 +437,7 @@ static func _init_definitions() -> void:
 	rpg7.weapon_name = "RPG-7"
 	rpg7.category = WeaponCategory.ROCKET_LAUNCHER
 	rpg7.fire_pattern = FirePattern.SINGLE
-	rpg7.trajectory = Trajectory.FLAT
+	rpg7.trajectory = Trajectory.ARCING  # Rockets use thrust physics
 	rpg7.damage_type = DamageType.ARMOR_PIERCING
 	rpg7.fear_type = GameEnums.FearType.MORTAR
 	rpg7.rate_of_fire = 4.0
@@ -448,13 +454,15 @@ static func _init_definitions() -> void:
 	rpg7.suppression_near_miss = 35.0
 	rpg7.suppression_radius = 8.0
 	rpg7.aoe_radius = 4.0
-	rpg7.projectile_speed = 120.0
+	rpg7.projectile_speed = 30.0  # Initial speed (booster charge)
 	rpg7.armor_penetration = 250.0
 	rpg7.anti_vehicle_bonus = 2.5
 	rpg7.magazine_size = 1
 	rpg7.ammo_type = "pg7_heat"
 	rpg7.sound_profile = "rocket_soviet"
 	rpg7.accuracy_variance = 0.25  # Unguided rocket - high variance, creates tension
+	rpg7.rocket_thrust = 70.0  # Sustainer motor acceleration
+	rpg7.rocket_burn_time = 0.6  # Short burn (RPG-7 sustainer is brief)
 	DEFINITIONS["rpg7"] = rpg7
 
 	# ========================================
@@ -659,7 +667,7 @@ static func _init_definitions() -> void:
 	ffar.weapon_name = "2.75\" FFAR"
 	ffar.category = WeaponCategory.HELICOPTER_ROCKET
 	ffar.fire_pattern = FirePattern.STAGGER  # Ripple fire
-	ffar.trajectory = Trajectory.FLAT
+	ffar.trajectory = Trajectory.ARCING  # Rockets accelerate with thrust then coast
 	ffar.damage_type = DamageType.EXPLOSIVE
 	ffar.fear_type = GameEnums.FearType.MORTAR
 	ffar.rate_of_fire = 120.0
@@ -676,18 +684,20 @@ static func _init_definitions() -> void:
 	ffar.suppression_near_miss = 40.0
 	ffar.suppression_radius = 10.0
 	ffar.aoe_radius = 8.0
-	ffar.projectile_speed = 200.0
+	ffar.projectile_speed = 50.0  # Initial speed, then accelerates
 	ffar.magazine_size = 19  # Per pod
 	ffar.ammo_type = "2.75_ffar"
 	ffar.sound_profile = "rocket_heli"
 	ffar.accuracy_variance = 0.15  # FFAR rockets - unguided but helicopter pilots are trained
+	ffar.rocket_thrust = 60.0  # Strong acceleration (m/s²)
+	ffar.rocket_burn_time = 1.5  # 1.5 second burn
 	DEFINITIONS["ffar_rocket"] = ffar
 
 	# ========================================
 	# AIRCRAFT WEAPONS
 	# ========================================
 
-	# === 20mm Cannon (Aircraft) ===
+	# === 20mm Cannon (Aircraft - A-1, A-4, etc.) ===
 	var cannon_20mm := WeaponDef.new()
 	cannon_20mm.weapon_name = "20mm Cannon"
 	cannon_20mm.category = WeaponCategory.AIRCRAFT_GUN
@@ -716,6 +726,66 @@ static func _init_definitions() -> void:
 	cannon_20mm.sound_profile = "cannon_aircraft"
 	cannon_20mm.accuracy_variance = 0.05  # Aircraft cannon - very precise during strafing runs
 	DEFINITIONS["cannon_20mm"] = cannon_20mm
+
+	# === M61 Vulcan (F-4E Phantom internal gun) ===
+	var m61_vulcan := WeaponDef.new()
+	m61_vulcan.weapon_name = "M61 Vulcan"
+	m61_vulcan.category = WeaponCategory.AIRCRAFT_GUN
+	m61_vulcan.fire_pattern = FirePattern.AUTO
+	m61_vulcan.trajectory = Trajectory.DIVING
+	m61_vulcan.damage_type = DamageType.KINETIC
+	m61_vulcan.fear_type = GameEnums.FearType.MACHINE_GUN
+	m61_vulcan.rate_of_fire = 6000.0  # 6000 RPM - 100 rounds per second!
+	m61_vulcan.reload_time = 0.0
+	m61_vulcan.burst_count = 0
+	m61_vulcan.damage = 40.0  # 20mm HEI rounds
+	m61_vulcan.effective_range = 500.0
+	m61_vulcan.max_range = 1200.0
+	m61_vulcan.base_accuracy = 0.60
+	m61_vulcan.accuracy_falloff = 0.30
+	m61_vulcan.scatter_angle = 4.0  # Tighter spread than older cannons
+	m61_vulcan.suppression = 90.0  # Devastating suppression from volume of fire
+	m61_vulcan.suppression_near_miss = 60.0
+	m61_vulcan.suppression_radius = 12.0
+	m61_vulcan.projectile_speed = 1030.0  # M61 muzzle velocity ~1030 m/s
+	m61_vulcan.armor_penetration = 35.0
+	m61_vulcan.anti_vehicle_bonus = 1.0
+	m61_vulcan.tracer_ratio = 5
+	m61_vulcan.magazine_size = 640  # F-4E carried 640 rounds
+	m61_vulcan.ammo_type = "20mm_vulcan"
+	m61_vulcan.sound_profile = "vulcan_cannon"  # Distinctive BRRRT sound
+	m61_vulcan.accuracy_variance = 0.04  # Very precise rotary cannon
+	DEFINITIONS["m61_vulcan"] = m61_vulcan
+
+	# === GAU-2B/A Minigun (A-37 Dragonfly) ===
+	var gau2b := WeaponDef.new()
+	gau2b.weapon_name = "GAU-2B/A Minigun"
+	gau2b.category = WeaponCategory.AIRCRAFT_GUN
+	gau2b.fire_pattern = FirePattern.AUTO
+	gau2b.trajectory = Trajectory.DIVING
+	gau2b.damage_type = DamageType.KINETIC
+	gau2b.fear_type = GameEnums.FearType.MACHINE_GUN
+	gau2b.rate_of_fire = 3000.0  # 3000 RPM - 50 rounds per second
+	gau2b.reload_time = 0.0
+	gau2b.burst_count = 0
+	gau2b.damage = 18.0  # 7.62mm - less damage than 20mm but volume of fire
+	gau2b.effective_range = 400.0
+	gau2b.max_range = 900.0
+	gau2b.base_accuracy = 0.50
+	gau2b.accuracy_falloff = 0.25
+	gau2b.scatter_angle = 6.0  # Wider spread than cannon
+	gau2b.suppression = 70.0  # High suppression from volume
+	gau2b.suppression_near_miss = 45.0
+	gau2b.suppression_radius = 10.0
+	gau2b.projectile_speed = 853.0  # 7.62 NATO muzzle velocity
+	gau2b.armor_penetration = 10.0  # Light armor only
+	gau2b.anti_vehicle_bonus = 0.3
+	gau2b.tracer_ratio = 5
+	gau2b.magazine_size = 1500  # Large ammo capacity
+	gau2b.ammo_type = "7.62mm_minigun"
+	gau2b.sound_profile = "minigun"  # Same BRRRT as door guns
+	gau2b.accuracy_variance = 0.06
+	DEFINITIONS["gau2b_minigun"] = gau2b
 
 	# === Napalm Canister ===
 	var napalm := WeaponDef.new()

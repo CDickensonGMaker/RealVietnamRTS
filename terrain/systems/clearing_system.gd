@@ -1,18 +1,19 @@
 extends Node
 ## Clearing System - Jungle clearing with progressive stages
 ## Handles vegetation removal and terrain flattening for firebase construction
+##
+## Uses ClearingState.Stage enum (terrain/clearing_state.gd) as single source of truth
+## Writes clearing data to TerrainGrid (SINGLE SOURCE OF TRUTH)
+
+const ClearingStateClass = preload("res://terrain/clearing_state.gd")
 
 signal clearing_started(zone_id: int, position: Vector3)
 signal clearing_progress(zone_id: int, progress: float)
 signal clearing_completed(zone_id: int)
 signal vegetation_updated(region: Rect2i)
 
-enum ClearingStage {
-	JUNGLE,              # Full vegetation
-	PARTIALLY_CLEARED,   # Trees down, stumps remain
-	CLEARED,             # Open ground
-	FORTIFIED,           # Flattened and prepared
-}
+## Alias for backward compatibility - use ClearingState.Stage directly in new code
+const ClearingStage = ClearingStateClass.Stage
 
 # Clearing zone data
 class ClearingZone:
@@ -56,22 +57,18 @@ const STAGE_PARAMS: Dictionary = {
 var zones: Dictionary = {}  # id -> ClearingZone
 var next_zone_id: int = 0
 
-# Vegetation density map
-var vegetation_map: Image
-var vegetation_size: int = 512
+# Reference to TerrainGrid (SINGLE SOURCE OF TRUTH)
+var terrain_grid: RefCounted
 
-# Clearing overlay texture
-var clearing_texture: Image
-
-# Reference to terrain manager (set by terrain_lab)
+# Reference to terrain manager (for terrain modification)
 var terrain_manager: Node
 
-# Reference to vegetation manager (for actual terrain type density)
+# Reference to vegetation manager (for visual updates)
 var vegetation_manager: Node
 
 
 func _ready() -> void:
-	_init_vegetation_map()
+	pass
 
 
 ## Set terrain manager reference (called by terrain_lab)
@@ -84,12 +81,9 @@ func set_vegetation_manager(veg_mgr: Node) -> void:
 	vegetation_manager = veg_mgr
 
 
-func _init_vegetation_map() -> void:
-	vegetation_map = Image.create(vegetation_size, vegetation_size, false, Image.FORMAT_RF)
-	vegetation_map.fill(Color(1.0, 1.0, 1.0, 1.0))  # Full vegetation
-
-	clearing_texture = Image.create(vegetation_size, vegetation_size, false, Image.FORMAT_RGBA8)
-	clearing_texture.fill(Color(0, 0, 0, 0))
+## Set terrain grid reference (SINGLE SOURCE OF TRUTH)
+func set_terrain_grid(grid: RefCounted) -> void:
+	terrain_grid = grid
 
 
 ## Create a new clearing zone
@@ -129,7 +123,7 @@ func advance_clearing(zone_id: int, amount: float) -> void:
 			zone.progress = 1.0
 
 	clearing_progress.emit(zone_id, _get_total_progress(zone))
-	_update_vegetation_map(zone)
+	_update_terrain_grid(zone)
 
 
 ## Set zone directly to a stage (for testing)
@@ -142,7 +136,7 @@ func set_zone_stage(zone_id: int, stage: ClearingStage) -> void:
 	zone.progress = 0.0
 
 	_apply_stage_changes(zone)
-	_update_vegetation_map(zone)
+	_update_terrain_grid(zone)
 
 
 ## Apply terrain modifications for current stage
@@ -200,109 +194,64 @@ func _is_in_zone(zone: ClearingZone, x: int, y: int, center: Vector2i, radius_ce
 		return dist <= radius_cells
 
 
-## Update vegetation density map
-func _update_vegetation_map(zone: ClearingZone) -> void:
-	if not terrain_manager:
+## Update TerrainGrid with zone's clearing state (SINGLE SOURCE OF TRUTH)
+func _update_terrain_grid(zone: ClearingZone) -> void:
+	if not terrain_grid:
 		return
 
-	var params: Dictionary = STAGE_PARAMS[zone.stage]
-	var density: float = params.vegetation_density
-	var ground_color: Color = params.ground_color
+	# Write clearing stage to TerrainGrid for the zone area
+	if zone.shape == "rectangle":
+		_update_terrain_grid_rect(zone)
+	else:
+		_update_terrain_grid_circle(zone)
 
-	var scale: float = float(vegetation_size) / terrain_manager.map_size
 
-	var tex_center := Vector2i(
-		int(zone.center.x * scale),
-		int(zone.center.z * scale)
-	)
-	var tex_radius: int = int(zone.radius * scale) + 1
+## Update TerrainGrid for circular zone
+func _update_terrain_grid_circle(zone: ClearingZone) -> void:
+	terrain_grid.set_clearing_stage_area(zone.center, zone.radius, zone.stage)
 
-	for y in range(max(0, tex_center.y - tex_radius), min(vegetation_size, tex_center.y + tex_radius)):
-		for x in range(max(0, tex_center.x - tex_radius), min(vegetation_size, tex_center.x + tex_radius)):
-			var in_zone: bool = false
 
-			if zone.shape == "rectangle":
-				var half_w: int = int(zone.rect_size.x * scale * 0.5)
-				var half_h: int = int(zone.rect_size.y * scale * 0.5)
-				in_zone = abs(x - tex_center.x) <= half_w and abs(y - tex_center.y) <= half_h
-			else:
-				var dist: float = Vector2(x - tex_center.x, y - tex_center.y).length()
-				in_zone = dist <= tex_radius
+## Update TerrainGrid for rectangular zone
+func _update_terrain_grid_rect(zone: ClearingZone) -> void:
+	# For rectangles, iterate through all cells in the rectangle
+	var half_w: float = zone.rect_size.x * 0.5
+	var half_h: float = zone.rect_size.y * 0.5
+	var cell_size: float = terrain_grid.CELL_SIZE
 
-			if in_zone:
-				# Calculate falloff at edges
-				var edge_dist: float
-				if zone.shape == "rectangle":
-					var half_w: float = zone.rect_size.x * scale * 0.5
-					var half_h: float = zone.rect_size.y * scale * 0.5
-					var dx: float = abs(x - tex_center.x)
-					var dy: float = abs(y - tex_center.y)
-					edge_dist = min((half_w - dx) / (half_w * 0.2), (half_h - dy) / (half_h * 0.2))
-				else:
-					var dist: float = Vector2(x - tex_center.x, y - tex_center.y).length()
-					edge_dist = (tex_radius - dist) / (tex_radius * 0.2)
+	var min_x: int = int((zone.center.x - half_w) / cell_size)
+	var max_x: int = int(ceil((zone.center.x + half_w) / cell_size))
+	var min_z: int = int((zone.center.z - half_h) / cell_size)
+	var max_z: int = int(ceil((zone.center.z + half_h) / cell_size))
 
-				var falloff: float = clampf(edge_dist, 0.0, 1.0)
+	for gz in range(min_z, max_z):
+		for gx in range(min_x, max_x):
+			terrain_grid.set_clearing_stage_at(gx, gz, zone.stage)
 
-				# Update vegetation density
-				var current_density: float = vegetation_map.get_pixel(x, y).r
-				var new_density: float = lerp(current_density, density, falloff)
-				vegetation_map.set_pixel(x, y, Color(new_density, new_density, new_density, 1.0))
-
-				# Update clearing color overlay
-				var current_color: Color = clearing_texture.get_pixel(x, y)
-				var alpha: float = (1.0 - density) * falloff
-				var new_color := Color(
-					lerp(current_color.r, ground_color.r, alpha),
-					lerp(current_color.g, ground_color.g, alpha),
-					lerp(current_color.b, ground_color.b, alpha),
-					max(current_color.a, alpha)
-				)
-				clearing_texture.set_pixel(x, y, new_color)
-
-	vegetation_updated.emit(Rect2i(tex_center - Vector2i(tex_radius, tex_radius),
-								  Vector2i(tex_radius * 2, tex_radius * 2)))
+	# Emit update signal for the region
+	var region := Rect2i(min_x, min_z, max_x - min_x, max_z - min_z)
+	vegetation_updated.emit(region)
 
 
 func _get_total_progress(zone: ClearingZone) -> float:
-	var stage_progress: float = float(zone.stage) / float(ClearingStage.FORTIFIED)
-	var within_stage: float = zone.progress / float(ClearingStage.FORTIFIED)
+	# Total stages = 4 (JUNGLE=0 through FORTIFIED=3), so total steps = 4
+	const TOTAL_STAGES: float = 4.0
+	var stage_progress: float = float(zone.stage) / TOTAL_STAGES
+	var within_stage: float = zone.progress / TOTAL_STAGES
 	return stage_progress + within_stage
 
 
 ## Get vegetation density at world position (0-1)
-## Checks both clearing zones AND actual terrain type from VegetationManager
+## Reads from TerrainGrid as SINGLE SOURCE OF TRUTH
 func get_vegetation_density(world_pos: Vector3) -> float:
-	if not terrain_manager:
-		return 1.0
+	if terrain_grid:
+		return terrain_grid.get_vegetation_density(world_pos)
 
-	# First check the clearing map (zones that have been actively cleared)
-	var scale: float = float(vegetation_size) / terrain_manager.map_size
-	var x: int = clampi(int(world_pos.x * scale), 0, vegetation_size - 1)
-	var y: int = clampi(int(world_pos.z * scale), 0, vegetation_size - 1)
-	var cleared_density: float = vegetation_map.get_pixel(x, y).r
-
-	# If this area has been actively cleared (density reduced from default 1.0), use that value
-	if cleared_density < 0.9:
-		return cleared_density
-
-	# Otherwise, check actual terrain type from VegetationManager
+	# Fallback for backwards compatibility
 	if vegetation_manager and vegetation_manager.has_method("get_density_at"):
 		var chunk_size: float = terrain_manager.chunk_size if terrain_manager else 256.0
 		return vegetation_manager.get_density_at(world_pos, chunk_size)
 
-	# Fallback to clearing map value
-	return cleared_density
-
-
-## Get vegetation texture for terrain material
-func get_vegetation_texture() -> ImageTexture:
-	return ImageTexture.create_from_image(vegetation_map)
-
-
-## Get clearing color overlay texture
-func get_clearing_texture() -> ImageTexture:
-	return ImageTexture.create_from_image(clearing_texture)
+	return 1.0
 
 
 ## Remove a clearing zone
@@ -313,6 +262,114 @@ func remove_zone(zone_id: int) -> void:
 ## Clear all zones (for testing reset)
 func clear_all_zones() -> void:
 	zones.clear()
-	vegetation_map.fill(Color(1.0, 1.0, 1.0, 1.0))
-	clearing_texture.fill(Color(0, 0, 0, 0))
-	vegetation_updated.emit(Rect2i(Vector2i.ZERO, Vector2i(vegetation_size, vegetation_size)))
+
+	# Reset all TerrainGrid clearing data to JUNGLE
+	if terrain_grid:
+		# Note: This would ideally have a bulk reset method
+		# For now, we just clear the zones dictionary
+		pass
+
+
+## =============================================================================
+## POSITION QUERY API (used by TerrainClearingSystem forwarder)
+## =============================================================================
+
+## Check if a world position is within a cleared zone (CLEARED or FORTIFIED stage)
+func is_position_cleared(position: Vector3) -> bool:
+	# Check TerrainGrid first (authoritative)
+	if terrain_grid:
+		return terrain_grid.is_position_cleared(position)
+
+	# Fallback to zone-based check
+	for zone_id: int in zones:
+		var zone: ClearingZone = zones[zone_id]
+		if _is_position_in_zone(position, zone):
+			return zone.stage >= ClearingStage.CLEARED
+	return false
+
+
+## Get the clearing stage at a world position
+func get_zone_stage_at(position: Vector3) -> ClearingStage:
+	# Check TerrainGrid first (authoritative)
+	if terrain_grid:
+		return terrain_grid.get_clearing_stage(position) as ClearingStage
+
+	# Fallback to zone-based check
+	for zone_id: int in zones:
+		var zone: ClearingZone = zones[zone_id]
+		if _is_position_in_zone(position, zone):
+			return zone.stage
+	return ClearingStage.JUNGLE
+
+
+## Get zone at a position (or null)
+func get_zone_at(position: Vector3) -> ClearingZone:
+	for zone_id: int in zones:
+		var zone: ClearingZone = zones[zone_id]
+		if _is_position_in_zone(position, zone):
+			return zone
+	return null
+
+
+## Helper to check if position is inside a zone
+func _is_position_in_zone(position: Vector3, zone: ClearingZone) -> bool:
+	if zone.shape == "rectangle":
+		var half_w := zone.rect_size.x * 0.5
+		var half_h := zone.rect_size.y * 0.5
+		return absf(position.x - zone.center.x) <= half_w and absf(position.z - zone.center.z) <= half_h
+	else:
+		return position.distance_to(zone.center) <= zone.radius
+
+
+## =============================================================================
+## EXTERNAL CLEARING API (called by TreeNodeManager when ClearingZoneNode completes)
+## =============================================================================
+
+## Mark an area as cleared without creating a formal zone
+## Used when node-based clearing (TreeNodeManager) completes
+func mark_area_cleared(center: Vector3, radius: float) -> void:
+	if not terrain_grid:
+		push_warning("[ClearingSystem] Cannot mark area cleared - no terrain_grid")
+		return
+
+	# TerrainGrid.CELL_SIZE is 4.0m (canonical gameplay cell size)
+	var cell_size: float = 4.0
+	var min_x: int = int((center.x - radius) / cell_size)
+	var max_x: int = int(ceil((center.x + radius) / cell_size))
+	var min_z: int = int((center.z - radius) / cell_size)
+	var max_z: int = int(ceil((center.z + radius) / cell_size))
+
+	# Mark all cells in the circular area as CLEARED
+	var center_gx: float = center.x / cell_size
+	var center_gz: float = center.z / cell_size
+	var radius_cells: float = radius / cell_size
+
+	for gz in range(min_z, max_z):
+		for gx in range(min_x, max_x):
+			var dist: float = Vector2(gx - center_gx, gz - center_gz).length()
+			if dist <= radius_cells:
+				terrain_grid.set_clearing_stage_at(gx, gz, ClearingStage.CLEARED)
+
+	# Emit vegetation_updated signal to trigger billboard regeneration
+	var region := Rect2i(min_x, min_z, max_x - min_x, max_z - min_z)
+	vegetation_updated.emit(region)
+
+	# Notify overlapping JungleZones that clearing has occurred
+	var cleared_area: float = PI * radius * radius
+	_notify_jungle_zones(center, radius, cleared_area)
+
+	print("[ClearingSystem] Area marked cleared at %v r=%.1f (%d cells)" % [
+		center, radius, (max_x - min_x) * (max_z - min_z)
+	])
+
+
+## Notify JungleZone nodes that clearing has occurred in their area
+func _notify_jungle_zones(center: Vector3, radius: float, cleared_area: float) -> void:
+	var jungle_zones: Array[Node] = get_tree().get_nodes_in_group("jungle_zones")
+	for zone_node in jungle_zones:
+		if not is_instance_valid(zone_node):
+			continue
+		# Check if zone has overlaps_circle method (JungleZone)
+		if zone_node.has_method("overlaps_circle") and zone_node.has_method("mark_area_cleared"):
+			if zone_node.overlaps_circle(center, radius):
+				zone_node.mark_area_cleared(cleared_area)

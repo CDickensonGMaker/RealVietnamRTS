@@ -6,6 +6,7 @@ class_name HeliMission
 
 enum MissionType {
 	SUPPLY_RUN,        # Automated supply delivery
+	EMERGENCY_SUPPLY,  # Emergency supply when roads cut (Pillar 3)
 	MEDEVAC_STANDBY,   # Auto-extract wounded when called
 	TROOP_ROTATION,    # Regular reinforcement runs
 	INSERTION,         # One-time troop insertion
@@ -40,6 +41,9 @@ var cargo_manifest: Array[Node3D] = []  # Troops/supplies to transport
 ## Rules of engagement
 var weapons_free: bool = false
 var abort_if_hot: bool = false  # Abort if LZ becomes hot
+
+## Supply payload (Pillar 3: Physical Supply Chains)
+var supply_payload: float = 0.0  # Amount of supplies to deliver
 
 
 static func create_insertion(
@@ -122,6 +126,29 @@ static func create_gunship_cap(
 		var offset := Vector3(cos(angle), 0, sin(angle)) * patrol_radius
 		mission.waypoints.append(patrol_center + offset)
 
+	return mission
+
+
+static func create_emergency_supply(
+	origin: Node3D,
+	destination: Node3D,
+	supply_amount: float = 100.0,
+	name: String = "Emergency Supply"
+) -> HeliMission:
+	"""Create emergency supply mission when roads are cut (Pillar 3)
+
+	Triggered automatically when:
+	- Firebase road supply route is blocked
+	- Firebase supply level is critical (< 25%)
+	"""
+	var mission := HeliMission.new()
+	mission.mission_type = MissionType.EMERGENCY_SUPPLY
+	mission.mission_name = name
+	mission.origin_lz = origin
+	mission.destination_lz = destination
+	mission.supply_payload = supply_amount
+	mission.repeat = false  # One-time emergency delivery
+	mission.abort_if_hot = false  # Must deliver even under fire
 	return mission
 
 

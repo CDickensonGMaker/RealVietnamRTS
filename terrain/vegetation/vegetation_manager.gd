@@ -3,11 +3,12 @@ extends Node3D
 ## Grid-based vegetation with terrain types and density zones.
 ## Uses 2x2 cell bundles for efficient clearing and LOS.
 ##
-## NOTE: Terrain types are now defined in TerrainTypes (terrain/terrain_types.gd)
-## This class uses TerrainTypes.Type for the enum values.
+## Reads terrain type from TerrainGrid (SINGLE SOURCE OF TRUTH)
+## NOTE: Terrain types are defined in TerrainTypes (terrain/terrain_types.gd)
 
 ## Import unified terrain types
 const TerrainTypesConst = preload("res://terrain/terrain_types.gd")
+const GridCoordsClass = preload("res://terrain/core/grid_coords.gd")
 
 ## Alias for backward compatibility - all code using TerrainType.X continues to work
 const TerrainType = TerrainTypesConst.Type
@@ -15,8 +16,8 @@ const TerrainType = TerrainTypesConst.Type
 ## Bundle size (2x2 cells treated as one unit)
 const BUNDLE_SIZE := 2
 
-## Individual cell size in meters
-@export var cell_size: float = 4.0
+## Individual cell size in meters (defaults to GridCoords.GAMEPLAY_CELL_SIZE)
+@export var cell_size: float = GridCoordsClass.GAMEPLAY_CELL_SIZE
 
 ## Maximum slope for vegetation
 @export var max_slope_degrees: float = 50.0
@@ -30,14 +31,14 @@ var bundle_meters: float:
 
 # Terrain type properties: [tree_chance, tree_count_min, tree_count_max, blocks_los, move_speed]
 # move_speed: 1.0 = full speed, 0.5 = half speed, etc.
-# RESTORED DENSITY - billboards provide thick jungle illusion at distance
+# Reduced density for performance - billboards still provide jungle illusion
 const TYPE_PROPS := {
 	TerrainType.CLEAR:         [0.00, 0, 0, false, 1.0],
 	TerrainType.RICE_PADDY:    [0.00, 0, 0, false, 0.4],   # Water/mud - very slow
-	TerrainType.GRASSLAND:     [0.08, 0, 1, false, 0.95],  # Very sparse
-	TerrainType.LIGHT_JUNGLE:  [0.30, 1, 2, false, 0.8],   # Sparse
-	TerrainType.MEDIUM_JUNGLE: [0.55, 1, 3, true,  0.5],   # Moderate density
-	TerrainType.HEAVY_JUNGLE:  [0.80, 2, 4, true,  0.3],   # Dense canopy
+	TerrainType.GRASSLAND:     [0.05, 0, 1, false, 0.95],  # Very sparse
+	TerrainType.LIGHT_JUNGLE:  [0.15, 0, 1, false, 0.8],   # Sparse
+	TerrainType.MEDIUM_JUNGLE: [0.30, 1, 2, true,  0.5],   # Moderate density
+	TerrainType.HEAVY_JUNGLE:  [0.50, 1, 3, true,  0.3],   # Dense canopy
 }
 
 # Loaded vegetation meshes
@@ -45,7 +46,7 @@ var _meshes: Array[Mesh] = []  # Tree meshes
 var _grass_mesh: Mesh  # Grass patch mesh
 var _fallback_mesh: ArrayMesh
 
-# Grid data per chunk - stores TerrainType for each bundle
+# Grid data per chunk - stores TerrainType for each bundle (populated from TerrainGrid)
 # Dictionary[Vector2i, PackedByteArray]
 var _chunk_terrain: Dictionary = {}
 
@@ -82,6 +83,9 @@ var _chunk_size: float = 256.0
 # TerrainManager reference for water proximity checks
 var _terrain_manager: Node = null
 
+# TerrainGrid reference (SINGLE SOURCE OF TRUTH)
+var _terrain_grid: RefCounted = null
+
 # Frustum culling accumulator (don't check every frame)
 var _frustum_accumulator: float = 0.0
 const FRUSTUM_UPDATE_INTERVAL := 0.1  # 10Hz
@@ -112,6 +116,11 @@ func set_camera(cam: Camera3D) -> void:
 ## Set chunk size for culling calculations
 func set_chunk_size(size: float) -> void:
 	_chunk_size = size
+
+
+## Set terrain grid reference (SINGLE SOURCE OF TRUTH)
+func set_terrain_grid(grid: RefCounted) -> void:
+	_terrain_grid = grid
 
 
 ## Update visibility based on frustum and distance
@@ -164,11 +173,31 @@ func _aabb_in_frustum(aabb: AABB, frustum: Array[Plane]) -> bool:
 	return true
 
 
+## Jungle density model paths (user-provided 3D models)
+const JUNGLE_MODEL_PATHS := {
+	TerrainType.LIGHT_JUNGLE: "res://assets/models/terrain/foliage/jungle_light.glb",
+	TerrainType.MEDIUM_JUNGLE: "res://assets/models/terrain/foliage/jungle_medium.glb",
+	TerrainType.HEAVY_JUNGLE: "res://assets/models/terrain/foliage/jungle_heavy.glb",
+}
+
+## Loaded meshes per terrain type (for density-based rendering)
+var _jungle_meshes: Dictionary = {}  # TerrainType -> Mesh
+
 ## Load vegetation meshes
 func _load_vegetation_meshes() -> void:
 	_meshes.clear()
+	_jungle_meshes.clear()
 
-	# Try loading palm tree first as primary tree mesh
+	# Load jungle density models (always try to load these)
+	for terrain_type: int in JUNGLE_MODEL_PATHS:
+		var path: String = JUNGLE_MODEL_PATHS[terrain_type]
+		var mesh: Mesh = _load_first_mesh(path)
+		if mesh:
+			_jungle_meshes[terrain_type] = mesh
+			var type_name: String = ["", "", "", "LIGHT", "MEDIUM", "HEAVY"][terrain_type]
+			print("[VegetationManager] Loaded jungle_%s model" % type_name.to_lower())
+
+	# Try loading palm tree as fallback primary mesh
 	if use_external_models:
 		var palm := _load_first_mesh("res://vegetation/models/palm_tree.blend")
 		if palm:
@@ -238,43 +267,8 @@ func generate_for_chunk(chunk_coord: Vector2i, heightmap: Object, chunk_size: fl
 
 	_bundles_per_chunk = int(chunk_size / bundle_meters)
 
-	# Build terrain types if not cached
-	if not _chunk_terrain.has(chunk_coord):
-		var world_offset := Vector3(
-			chunk_coord.x * chunk_size,
-			0.0,
-			chunk_coord.y * chunk_size
-		)
-
-		# Create terrain type grid for this chunk
-		var terrain := PackedByteArray()
-		terrain.resize(_bundles_per_chunk * _bundles_per_chunk)
-
-		# RNG seeded by chunk coord for consistency
-		var rng := RandomNumberGenerator.new()
-		rng.seed = hash(chunk_coord)
-
-		# Assign terrain types based on height/slope/noise
-		for bz in _bundles_per_chunk:
-			for bx in _bundles_per_chunk:
-				var bundle_idx := bz * _bundles_per_chunk + bx
-
-				# Bundle center world position
-				var local_x := (bx + 0.5) * bundle_meters
-				var local_z := (bz + 0.5) * bundle_meters
-				var world_x := world_offset.x + local_x
-				var world_z := world_offset.z + local_z
-
-				# Sample terrain
-				var height := heightmap.sample_world(world_x, world_z) as float
-				var normal := heightmap.get_normal_world(world_x, world_z) as Vector3
-				var slope_dot := normal.dot(Vector3.UP)
-
-				# Determine terrain type based on conditions
-				var terrain_type := _determine_terrain_type(height, slope_dot, rng, world_x, world_z)
-				terrain[bundle_idx] = terrain_type
-
-		_chunk_terrain[chunk_coord] = terrain
+	# Build terrain types from TerrainGrid (SINGLE SOURCE OF TRUTH)
+	_build_terrain_from_grid(chunk_coord, chunk_size)
 
 	# Build placement cache if not cached
 	if not _chunk_placements.has(chunk_coord):
@@ -285,7 +279,102 @@ func generate_for_chunk(chunk_coord: Vector2i, heightmap: Object, chunk_size: fl
 	_materialize_grass(chunk_coord, heightmap)
 
 
-## Determine terrain type for a bundle
+## Build terrain type data from TerrainGrid
+func _build_terrain_from_grid(chunk_coord: Vector2i, chunk_size: float) -> void:
+	var world_offset := Vector3(
+		chunk_coord.x * chunk_size,
+		0.0,
+		chunk_coord.y * chunk_size
+	)
+
+	# Create terrain type grid for this chunk
+	var terrain := PackedByteArray()
+	terrain.resize(_bundles_per_chunk * _bundles_per_chunk)
+
+	# If we have TerrainGrid, read from it
+	if _terrain_grid:
+		for bz in _bundles_per_chunk:
+			for bx in _bundles_per_chunk:
+				var bundle_idx := bz * _bundles_per_chunk + bx
+
+				# Bundle center world position
+				var local_x := (bx + 0.5) * bundle_meters
+				var local_z := (bz + 0.5) * bundle_meters
+				var world_x := world_offset.x + local_x
+				var world_z := world_offset.z + local_z
+
+				# Read terrain type from TerrainGrid (SINGLE SOURCE OF TRUTH)
+				var world_pos := Vector3(world_x, 0, world_z)
+				var terrain_type: int = _terrain_grid.get_terrain_type(world_pos)
+
+				# Check vegetation density - if cleared, override to CLEAR
+				var density: float = _terrain_grid.get_vegetation_density(world_pos)
+				if density < 0.1:
+					terrain_type = TerrainType.CLEAR
+
+				terrain[bundle_idx] = terrain_type
+	else:
+		# Fallback: compute terrain types from heightmap (legacy behavior)
+		_build_terrain_from_heightmap(chunk_coord, chunk_size, terrain)
+
+	_chunk_terrain[chunk_coord] = terrain
+
+
+## Fallback: compute terrain types from heightmap (legacy)
+func _build_terrain_from_heightmap(chunk_coord: Vector2i, chunk_size: float, terrain: PackedByteArray) -> void:
+	var world_offset := Vector3(
+		chunk_coord.x * chunk_size,
+		0.0,
+		chunk_coord.y * chunk_size
+	)
+
+	# RNG seeded by chunk coord for consistency
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(chunk_coord)
+
+	# Get heightmap from terrain manager
+	var heightmap: Object = null
+	if _terrain_manager and _terrain_manager.has_method("get_heightmap"):
+		heightmap = _terrain_manager.get_heightmap()
+
+	for bz in _bundles_per_chunk:
+		for bx in _bundles_per_chunk:
+			var bundle_idx := bz * _bundles_per_chunk + bx
+
+			# Bundle center world position
+			var local_x := (bx + 0.5) * bundle_meters
+			var local_z := (bz + 0.5) * bundle_meters
+			var world_x := world_offset.x + local_x
+			var world_z := world_offset.z + local_z
+
+			# Sample terrain
+			var height: float = 50.0
+			var slope_dot: float = 0.98
+			if heightmap:
+				height = heightmap.sample_world(world_x, world_z)
+				var normal: Vector3 = heightmap.get_normal_world(world_x, world_z)
+				slope_dot = normal.dot(Vector3.UP)
+
+			# Determine terrain type based on conditions
+			var terrain_type := _determine_terrain_type(height, slope_dot, rng, world_x, world_z)
+			terrain[bundle_idx] = terrain_type
+
+
+## Regenerate a chunk from TerrainGrid (called when clearing changes)
+func regenerate_chunk(chunk_coord: Vector2i, heightmap: Object) -> void:
+	if not _chunk_terrain.has(chunk_coord):
+		return
+
+	# Rebuild terrain types from TerrainGrid
+	_build_terrain_from_grid(chunk_coord, _chunk_size)
+
+	# Clear and re-materialize visuals
+	clear_chunk_visuals(chunk_coord)
+	_materialize_vegetation(chunk_coord, heightmap)
+	_materialize_grass(chunk_coord, heightmap)
+
+
+## Determine terrain type for a bundle (legacy fallback)
 ## world_x/world_z are passed for water proximity checks
 func _determine_terrain_type(height: float, slope_dot: float, rng: RandomNumberGenerator, world_x: float = 0.0, world_z: float = 0.0) -> int:
 	# Steep slopes = clear
@@ -315,186 +404,6 @@ func _determine_terrain_type(height: float, slope_dot: float, rng: RandomNumberG
 		return TerrainType.MEDIUM_JUNGLE
 	else:
 		return TerrainType.HEAVY_JUNGLE
-
-
-## Generate vegetation meshes for chunk
-func _generate_chunk_vegetation(chunk_coord: Vector2i, heightmap: Object, chunk_size: float) -> void:
-	var terrain: PackedByteArray = _chunk_terrain[chunk_coord]
-
-	var world_offset := Vector3(
-		chunk_coord.x * chunk_size,
-		0.0,
-		chunk_coord.y * chunk_size
-	)
-
-	var rng := RandomNumberGenerator.new()
-	rng.seed = hash(chunk_coord) + 1000
-
-	var transforms: Array[Transform3D] = []
-
-	for bz in _bundles_per_chunk:
-		for bx in _bundles_per_chunk:
-			var bundle_idx := bz * _bundles_per_chunk + bx
-			var terrain_type: int = terrain[bundle_idx]
-
-			var props: Array = TYPE_PROPS[terrain_type]
-			var tree_chance: float = props[0]
-			var count_min: int = props[1]
-			var count_max: int = props[2]
-
-			if tree_chance <= 0.0 or rng.randf() > tree_chance:
-				continue
-
-			# Number of trees in this bundle
-			var tree_count := rng.randi_range(count_min, count_max)
-
-			# Place trees within the 2x2 bundle
-			for _t in tree_count:
-				var local_x := bx * bundle_meters + rng.randf() * bundle_meters
-				var local_z := bz * bundle_meters + rng.randf() * bundle_meters
-				var world_x := world_offset.x + local_x
-				var world_z := world_offset.z + local_z
-
-				var height := heightmap.sample_world(world_x, world_z) as float
-
-				var inst_transform := Transform3D.IDENTITY
-
-				# Random lean/tilt for natural variety (up to 15 degrees)
-				var tilt_x := rng.randf_range(-0.26, 0.26)  # ~15 degrees in radians
-				var tilt_z := rng.randf_range(-0.26, 0.26)
-				inst_transform = inst_transform.rotated(Vector3.RIGHT, tilt_x)
-				inst_transform = inst_transform.rotated(Vector3.FORWARD, tilt_z)
-
-				# Random Y rotation
-				inst_transform = inst_transform.rotated(Vector3.UP, rng.randf() * TAU)
-
-				# Palm tree is ~10m tall, scale 0.7-1.3 for variety
-				var tree_scale := rng.randf_range(0.7, 1.3)
-				inst_transform = inst_transform.scaled(Vector3.ONE * tree_scale)
-				inst_transform.origin = Vector3(world_x, height, world_z)
-
-				transforms.append(inst_transform)
-
-	if transforms.is_empty():
-		return
-
-	# Create MultiMesh with optimized buffer upload
-	var multimesh := MultiMesh.new()
-	multimesh.transform_format = MultiMesh.TRANSFORM_3D
-	multimesh.mesh = _meshes[0]
-	multimesh.instance_count = transforms.size()
-
-	# Build buffer directly instead of per-instance set_instance_transform calls
-	# Format: 12 floats per instance (basis rows + origin components)
-	var buffer := PackedFloat32Array()
-	buffer.resize(transforms.size() * 12)
-	for i in transforms.size():
-		var t := transforms[i]
-		var b := i * 12
-		buffer[b + 0] = t.basis.x.x; buffer[b + 1] = t.basis.y.x
-		buffer[b + 2] = t.basis.z.x; buffer[b + 3] = t.origin.x
-		buffer[b + 4] = t.basis.x.y; buffer[b + 5] = t.basis.y.y
-		buffer[b + 6] = t.basis.z.y; buffer[b + 7] = t.origin.y
-		buffer[b + 8] = t.basis.x.z; buffer[b + 9] = t.basis.y.z
-		buffer[b + 10] = t.basis.z.z; buffer[b + 11] = t.origin.z
-	multimesh.buffer = buffer
-
-	var mm_instance := MultiMeshInstance3D.new()
-	mm_instance.multimesh = multimesh
-	mm_instance.name = "Veg_%d_%d" % [chunk_coord.x, chunk_coord.y]
-	add_child(mm_instance)
-
-	_chunk_instances[chunk_coord] = mm_instance
-
-	# Generate grass patches
-	_generate_chunk_grass(chunk_coord, heightmap, chunk_size)
-
-	print("[VegetationManager] Chunk %s: %d trees placed" % [chunk_coord, transforms.size()])
-
-
-## Generate grass patches for chunk
-func _generate_chunk_grass(chunk_coord: Vector2i, heightmap: Object, chunk_size: float) -> void:
-	if not _grass_mesh:
-		return
-
-	var terrain: PackedByteArray = _chunk_terrain[chunk_coord]
-
-	var world_offset := Vector3(
-		chunk_coord.x * chunk_size,
-		0.0,
-		chunk_coord.y * chunk_size
-	)
-
-	var rng := RandomNumberGenerator.new()
-	rng.seed = hash(chunk_coord) + 5000  # Different seed than trees
-
-	var grass_transforms: Array[Transform3D] = []
-
-	# Grass is more frequent but only in vegetated areas
-	for bz in _bundles_per_chunk:
-		for bx in _bundles_per_chunk:
-			var bundle_idx := bz * _bundles_per_chunk + bx
-			var terrain_type: int = terrain[bundle_idx]
-
-			# Only place grass in jungle/grassland areas
-			if terrain_type == TerrainType.CLEAR or terrain_type == TerrainType.RICE_PADDY:
-				continue
-
-			# More grass in heavier jungle
-			var grass_count := 0
-			match terrain_type:
-				TerrainType.GRASSLAND: grass_count = rng.randi_range(1, 2)
-				TerrainType.LIGHT_JUNGLE: grass_count = rng.randi_range(1, 3)
-				TerrainType.MEDIUM_JUNGLE: grass_count = rng.randi_range(2, 4)
-				TerrainType.HEAVY_JUNGLE: grass_count = rng.randi_range(3, 5)
-
-			for _g in grass_count:
-				var local_x := bx * bundle_meters + rng.randf() * bundle_meters
-				var local_z := bz * bundle_meters + rng.randf() * bundle_meters
-				var world_x := world_offset.x + local_x
-				var world_z := world_offset.z + local_z
-
-				var height := heightmap.sample_world(world_x, world_z) as float
-
-				var inst_transform := Transform3D.IDENTITY
-				inst_transform = inst_transform.rotated(Vector3.UP, rng.randf() * TAU)
-
-				# Grass patches scaled 0.8-1.5
-				var grass_scale := rng.randf_range(0.8, 1.5)
-				inst_transform = inst_transform.scaled(Vector3.ONE * grass_scale)
-				inst_transform.origin = Vector3(world_x, height, world_z)
-
-				grass_transforms.append(inst_transform)
-
-	if grass_transforms.is_empty():
-		return
-
-	# Create grass MultiMesh with optimized buffer upload
-	var grass_mm := MultiMesh.new()
-	grass_mm.transform_format = MultiMesh.TRANSFORM_3D
-	grass_mm.mesh = _grass_mesh
-	grass_mm.instance_count = grass_transforms.size()
-
-	# Build buffer directly instead of per-instance set_instance_transform calls
-	var buffer := PackedFloat32Array()
-	buffer.resize(grass_transforms.size() * 12)
-	for i in grass_transforms.size():
-		var t := grass_transforms[i]
-		var b := i * 12
-		buffer[b + 0] = t.basis.x.x; buffer[b + 1] = t.basis.y.x
-		buffer[b + 2] = t.basis.z.x; buffer[b + 3] = t.origin.x
-		buffer[b + 4] = t.basis.x.y; buffer[b + 5] = t.basis.y.y
-		buffer[b + 6] = t.basis.z.y; buffer[b + 7] = t.origin.y
-		buffer[b + 8] = t.basis.x.z; buffer[b + 9] = t.basis.y.z
-		buffer[b + 10] = t.basis.z.z; buffer[b + 11] = t.origin.z
-	grass_mm.buffer = buffer
-
-	var grass_instance := MultiMeshInstance3D.new()
-	grass_instance.multimesh = grass_mm
-	grass_instance.name = "Grass_%d_%d" % [chunk_coord.x, chunk_coord.y]
-	add_child(grass_instance)
-
-	_chunk_grass[chunk_coord] = grass_instance
 
 
 ## Build placement cache for a chunk - rolls ALL RNG upfront, stores positions/rotations/scales/accept_rolls
@@ -562,13 +471,17 @@ func _build_placement_cache(chunk_coord: Vector2i, _heightmap: Object, chunk_siz
 
 
 ## Materialize trees from placement cache based on current terrain types
+## Uses density-specific jungle models when available for visual variety
 func _materialize_vegetation(chunk_coord: Vector2i, heightmap: Object) -> void:
 	if not _chunk_placements.has(chunk_coord) or not _chunk_terrain.has(chunk_coord):
 		return
 
 	var placements: Array = _chunk_placements[chunk_coord]
 	var terrain: PackedByteArray = _chunk_terrain[chunk_coord]
-	var transforms: Array[Transform3D] = []
+
+	# Group transforms by terrain type for density-specific meshes
+	var transforms_by_type: Dictionary = {}  # TerrainType -> Array[Transform3D]
+	var fallback_transforms: Array[Transform3D] = []
 
 	for p: Dictionary in placements:
 		if p.type != "tree":
@@ -593,34 +506,78 @@ func _materialize_vegetation(chunk_coord: Vector2i, heightmap: Object) -> void:
 		t = t.rotated(Vector3.UP, p.rot_y)
 		t = t.scaled(Vector3.ONE * p.scale)
 		t.origin = Vector3(p.world_x, height, p.world_z)
-		transforms.append(t)
 
-	if transforms.is_empty():
-		return
+		# Group by terrain type if we have a specific mesh for it
+		if _jungle_meshes.has(terrain_type):
+			if not transforms_by_type.has(terrain_type):
+				transforms_by_type[terrain_type] = []
+			transforms_by_type[terrain_type].append(t)
+		else:
+			fallback_transforms.append(t)
 
-	# Build MultiMesh
-	var multimesh := MultiMesh.new()
-	multimesh.transform_format = MultiMesh.TRANSFORM_3D
-	multimesh.mesh = _meshes[0]
-	multimesh.instance_count = transforms.size()
+	# Create container for all MultiMeshes in this chunk
+	var container := Node3D.new()
+	container.name = "Veg_%d_%d" % [chunk_coord.x, chunk_coord.y]
+	add_child(container)
+	_chunk_instances[chunk_coord] = container
 
-	var buffer := PackedFloat32Array()
-	buffer.resize(transforms.size() * 12)
-	for i in transforms.size():
-		var xform := transforms[i]
-		var b := i * 12
-		buffer[b+0] = xform.basis.x.x; buffer[b+1] = xform.basis.y.x; buffer[b+2] = xform.basis.z.x; buffer[b+3] = xform.origin.x
-		buffer[b+4] = xform.basis.x.y; buffer[b+5] = xform.basis.y.y; buffer[b+6] = xform.basis.z.y; buffer[b+7] = xform.origin.y
-		buffer[b+8] = xform.basis.x.z; buffer[b+9] = xform.basis.y.z; buffer[b+10] = xform.basis.z.z; buffer[b+11] = xform.origin.z
-	multimesh.buffer = buffer
+	var total_trees := 0
 
-	var mm_instance := MultiMeshInstance3D.new()
-	mm_instance.multimesh = multimesh
-	mm_instance.name = "Veg_%d_%d" % [chunk_coord.x, chunk_coord.y]
-	add_child(mm_instance)
-	_chunk_instances[chunk_coord] = mm_instance
+	# Build MultiMesh for each terrain type with specific models
+	for terrain_type: int in transforms_by_type:
+		var transforms: Array = transforms_by_type[terrain_type]
+		if transforms.is_empty():
+			continue
 
-	print("[VegetationManager] Chunk %s: %d trees materialized" % [chunk_coord, transforms.size()])
+		var multimesh := MultiMesh.new()
+		multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		multimesh.mesh = _jungle_meshes[terrain_type]
+		multimesh.instance_count = transforms.size()
+
+		var buffer := PackedFloat32Array()
+		buffer.resize(transforms.size() * 12)
+		for i in transforms.size():
+			var xform: Transform3D = transforms[i]
+			var b := i * 12
+			buffer[b+0] = xform.basis.x.x; buffer[b+1] = xform.basis.y.x; buffer[b+2] = xform.basis.z.x; buffer[b+3] = xform.origin.x
+			buffer[b+4] = xform.basis.x.y; buffer[b+5] = xform.basis.y.y; buffer[b+6] = xform.basis.z.y; buffer[b+7] = xform.origin.y
+			buffer[b+8] = xform.basis.x.z; buffer[b+9] = xform.basis.y.z; buffer[b+10] = xform.basis.z.z; buffer[b+11] = xform.origin.z
+		multimesh.buffer = buffer
+
+		var mm_instance := MultiMeshInstance3D.new()
+		mm_instance.multimesh = multimesh
+		var type_names: Dictionary = {3: "light", 4: "medium", 5: "heavy"}
+		var type_name: String = type_names.get(terrain_type, "unknown")
+		mm_instance.name = "Jungle_%s" % type_name
+		container.add_child(mm_instance)
+		total_trees += transforms.size()
+
+	# Build fallback MultiMesh for non-jungle terrain types
+	if not fallback_transforms.is_empty() and not _meshes.is_empty():
+		var multimesh := MultiMesh.new()
+		multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		multimesh.mesh = _meshes[0]
+		multimesh.instance_count = fallback_transforms.size()
+
+		var buffer := PackedFloat32Array()
+		buffer.resize(fallback_transforms.size() * 12)
+		for i in fallback_transforms.size():
+			var xform := fallback_transforms[i]
+			var b := i * 12
+			buffer[b+0] = xform.basis.x.x; buffer[b+1] = xform.basis.y.x; buffer[b+2] = xform.basis.z.x; buffer[b+3] = xform.origin.x
+			buffer[b+4] = xform.basis.x.y; buffer[b+5] = xform.basis.y.y; buffer[b+6] = xform.basis.z.y; buffer[b+7] = xform.origin.y
+			buffer[b+8] = xform.basis.x.z; buffer[b+9] = xform.basis.y.z; buffer[b+10] = xform.basis.z.z; buffer[b+11] = xform.origin.z
+		multimesh.buffer = buffer
+
+		var mm_instance := MultiMeshInstance3D.new()
+		mm_instance.multimesh = multimesh
+		mm_instance.name = "Trees_fallback"
+		container.add_child(mm_instance)
+		total_trees += fallback_transforms.size()
+
+	print("[VegetationManager] Chunk %s: %d trees materialized (density models: %d types)" % [
+		chunk_coord, total_trees, transforms_by_type.size()
+	])
 
 
 ## Materialize grass from placement cache based on current terrain types
@@ -728,6 +685,11 @@ func clear_area(center: Vector3, radius: float, chunk_size: float, heightmap: Ob
 
 ## Check if position blocks LOS (heavy/medium jungle)
 func blocks_los(world_pos: Vector3, chunk_size: float) -> bool:
+	# If we have TerrainGrid, use it (SINGLE SOURCE OF TRUTH)
+	if _terrain_grid:
+		return _terrain_grid.blocks_los(world_pos)
+
+	# Fallback to local terrain data
 	var chunk_coord := Vector2i(
 		int(floor(world_pos.x / chunk_size)),
 		int(floor(world_pos.z / chunk_size))
@@ -755,6 +717,11 @@ func blocks_los(world_pos: Vector3, chunk_size: float) -> bool:
 
 ## Get terrain type at world position
 func get_terrain_type_at(world_pos: Vector3, chunk_size: float) -> int:
+	# If we have TerrainGrid, use it (SINGLE SOURCE OF TRUTH)
+	if _terrain_grid:
+		return _terrain_grid.get_terrain_type(world_pos)
+
+	# Fallback to local terrain data
 	var chunk_coord := Vector2i(
 		int(floor(world_pos.x / chunk_size)),
 		int(floor(world_pos.z / chunk_size))
@@ -780,6 +747,11 @@ func get_terrain_type_at(world_pos: Vector3, chunk_size: float) -> int:
 
 ## Get movement speed multiplier at world position (1.0 = full speed)
 func get_movement_multiplier_at(world_pos: Vector3, chunk_size: float) -> float:
+	# If we have TerrainGrid, use it (SINGLE SOURCE OF TRUTH)
+	if _terrain_grid:
+		return _terrain_grid.get_movement_speed(world_pos)
+
+	# Fallback to local terrain data
 	var terrain_type := get_terrain_type_at(world_pos, chunk_size)
 	var props: Array = TYPE_PROPS[terrain_type]
 	return props[4]  # movement_speed
@@ -789,6 +761,11 @@ func get_movement_multiplier_at(world_pos: Vector3, chunk_size: float) -> float:
 ## Returns 0.0 (clear) to 1.0 (heavy jungle)
 ## Used by ClearingSystem for path blocking checks
 func get_density_at(world_pos: Vector3, chunk_size: float) -> float:
+	# If we have TerrainGrid, use it (SINGLE SOURCE OF TRUTH)
+	if _terrain_grid:
+		return _terrain_grid.get_vegetation_density(world_pos)
+
+	# Fallback to local terrain data
 	var terrain_type: int = get_terrain_type_at(world_pos, chunk_size)
 
 	# Map terrain types to density values
@@ -836,7 +813,7 @@ func set_terrain_type_at(world_pos: Vector3, chunk_size: float, new_type: int) -
 ## Clear visuals only - keeps cache for re-materialization
 func clear_chunk_visuals(chunk_coord: Vector2i) -> void:
 	if _chunk_instances.has(chunk_coord):
-		var instance: MultiMeshInstance3D = _chunk_instances[chunk_coord]
+		var instance: Node3D = _chunk_instances[chunk_coord]
 		if is_instance_valid(instance):
 			instance.queue_free()
 		_chunk_instances.erase(chunk_coord)
@@ -971,6 +948,26 @@ func _create_procedural_tree() -> ArrayMesh:
 	assert(mesh.get_surface_count() == 1, "Tree mesh should have exactly 1 surface")
 
 	return mesh
+
+
+## Get jungle mesh for a terrain type (public API for other systems)
+func get_jungle_mesh(terrain_type: int) -> Mesh:
+	if _jungle_meshes.has(terrain_type):
+		return _jungle_meshes[terrain_type]
+	return _fallback_mesh if _fallback_mesh else null
+
+
+## Check if jungle density models are loaded
+func has_jungle_models() -> bool:
+	return not _jungle_meshes.is_empty()
+
+
+## Get loaded jungle model types
+func get_loaded_jungle_types() -> Array[int]:
+	var types: Array[int] = []
+	for t: int in _jungle_meshes.keys():
+		types.append(t)
+	return types
 
 
 ## Create procedural grass patch mesh

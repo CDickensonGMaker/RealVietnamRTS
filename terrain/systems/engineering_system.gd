@@ -330,17 +330,15 @@ func _execute_dig_trench_batched(position: Vector3, direction: Vector3) -> void:
 		var pos: Vector3 = position + direction * offset
 
 		var modifier := func(h: float, falloff: float) -> float:
-			# Trench profile: depression in center, berms on sides
-			if falloff > 0.6:
-				# Center of trench - dig down
-				var dig_falloff: float = (falloff - 0.6) / 0.4
-				return h - depth * dig_falloff
-			elif falloff > 0.3:
-				# Berm zone - pile dirt up
-				var berm_falloff: float = (falloff - 0.3) / 0.3
-				return h + berm_height * berm_falloff
-			else:
-				return h
+			# Smooth trench profile: continuous dig + berm curves (no hard boundaries)
+			# Dig curve: peaks at center (high falloff), fades toward edges
+			var dig: float = depth * smoothstep(0.4, 0.9, falloff)
+
+			# Berm curve: ring around trench center, fades at both inner and outer edges
+			var berm_factor: float = smoothstep(0.1, 0.4, falloff) * smoothstep(0.7, 0.5, falloff)
+			var berm: float = berm_height * berm_factor
+
+			return h - dig + berm
 
 		terrain_manager.modify_terrain(pos, width * 1.5, modifier)
 		_mark_affected_chunk(pos)
@@ -408,25 +406,20 @@ func _execute_create_berm(position: Vector3) -> void:
 	var target_height: float = _get_average_height(position, inner_radius)
 
 	var modifier := func(h: float, falloff: float) -> float:
-		# Calculate distance from center (inverse of falloff)
-		var dist_ratio: float = 1.0 - falloff  # 0 at center, 1 at edge
+		# Continuous berm profile using smoothstep (no hard boundaries)
+		# dist_ratio: 0 at center, 1 at edge
+		var dist_ratio: float = 1.0 - falloff
 
-		# Inner flat area (0 to 0.7 of inner_radius)
-		if dist_ratio < 0.7:
-			var flatten_blend: float = smoothstep(0.0, 0.3, falloff)
-			return lerp(h, target_height - trench_depth * 0.3, flatten_blend * 0.8)
+		# Inner flat area: strong flattening at center, fading toward edges
+		var inner_flat: float = smoothstep(0.0, 0.6, falloff)
+		var flat_h: float = lerp(h, target_height - trench_depth * 0.3, inner_flat * 0.8)
 
-		# Transition zone (0.7 to 0.85)
-		elif dist_ratio < 0.85:
-			var t: float = (dist_ratio - 0.7) / 0.15
-			var berm_h: float = target_height + berm_height * sin(t * PI)
-			return lerp(h, berm_h, 0.9)
+		# Berm ring: smooth bell curve peaking near the perimeter
+		# Peaks around dist_ratio 0.8, fades to 0 at center and outer edge
+		var berm_ring: float = smoothstep(0.5, 0.75, dist_ratio) * smoothstep(1.0, 0.85, dist_ratio)
+		var berm_contribution: float = berm_height * berm_ring
 
-		# Berm ring (0.85 to 1.0)
-		else:
-			var t: float = (dist_ratio - 0.85) / 0.15
-			var berm_h: float = target_height + berm_height * (1.0 - t * 0.5)
-			return lerp(h, berm_h, 0.85 * (1.0 - t * 0.5))
+		return flat_h + berm_contribution
 
 	terrain_manager.modify_terrain(position, outer_radius, modifier)
 
@@ -442,14 +435,15 @@ func _execute_dig_foxhole(position: Vector3) -> void:
 	var berm_height: float = profile.berm_height
 
 	var modifier := func(h: float, falloff: float) -> float:
-		if falloff > 0.5:
-			# Center - dig down
-			var dig_blend: float = (falloff - 0.5) / 0.5
-			return h - depth * dig_blend
-		else:
-			# Edge - small berm
-			var berm_blend: float = falloff / 0.5
-			return h + berm_height * berm_blend * (1.0 - berm_blend)
+		# Smooth foxhole profile: continuous dig + berm curves (no hard boundaries)
+		# Dig curve: peaks at center (high falloff), fades toward edges
+		var dig: float = depth * smoothstep(0.3, 0.85, falloff)
+
+		# Berm curve: ring around foxhole, fades at both inner and outer edges
+		var berm_factor: float = smoothstep(0.0, 0.35, falloff) * smoothstep(0.6, 0.4, falloff)
+		var berm: float = berm_height * berm_factor
+
+		return h - dig + berm
 
 	terrain_manager.modify_terrain(position, radius * 1.5, modifier)
 	_clear_vegetation(position, radius * 2)
@@ -463,18 +457,15 @@ func _execute_crater_blast(position: Vector3) -> void:
 	var rim_height: float = profile.rim_height
 
 	var modifier := func(h: float, falloff: float) -> float:
-		# Classic crater shape
-		if falloff > 0.7:
-			# Inner crater
-			var crater_blend: float = pow((falloff - 0.7) / 0.3, 1.5)
-			return h - depth * crater_blend
-		elif falloff > 0.4:
-			# Rim
-			var rim_blend: float = (falloff - 0.4) / 0.3
-			return h + rim_height * sin(rim_blend * PI)
-		else:
-			# Outer falloff
-			return h
+		# Smooth crater profile: continuous crater + rim curves (no hard boundaries)
+		# Crater curve: peaks at center (high falloff), fades toward edges
+		var crater: float = depth * smoothstep(0.5, 0.95, falloff)
+
+		# Rim curve: ring around crater, fades at both inner and outer edges
+		var rim_factor: float = smoothstep(0.3, 0.6, falloff) * smoothstep(0.8, 0.65, falloff)
+		var rim: float = rim_height * rim_factor
+
+		return h - crater + rim
 
 	terrain_manager.modify_terrain(position, radius * 1.3, modifier)
 	_clear_vegetation(position, radius * 1.5)

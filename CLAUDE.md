@@ -1,5 +1,24 @@
 # RealVietnamRTS - Project Guidelines
 
+<!-- Claude Code Game Studios Integration -->
+<!-- 49 coordinated agents, 73 workflow skills, structured game development -->
+
+## Agent Architecture
+
+@.claude/docs/coordination-rules.md
+
+## Technical Stack
+
+- **Engine**: Godot 4.6
+- **Language**: GDScript
+- **Version Control**: Git with trunk-based development
+
+@.claude/docs/technical-preferences.md
+
+> **First session?** Run `/start` to begin guided onboarding, or `/project-stage-detect` to assess current state.
+
+---
+
 > **CRITICAL: Read GAME_BIBLE.md before ANY work.** This file is a quick reference; the Bible is authoritative.
 
 ## Game Bible

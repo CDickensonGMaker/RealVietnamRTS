@@ -49,11 +49,60 @@ var pending_reinforcements: int = 0
 var successful_assaults: int = 0
 var failed_assaults: int = 0
 
+## L4D-style Stress System (PRD Phase 6)
+var player_stress: float = 0.0  # 0.0 = relaxed, 1.0 = overwhelmed
+var _recent_casualties: int = 0  # Casualties in last 30 seconds
+var _casualty_timer: float = 0.0
+var _firebase_under_attack: bool = false
+var _supply_critical: bool = false
+const STRESS_DECAY_RATE: float = 0.05  # Stress decays per second when conditions improve
+const STRESS_CASUALTY_WEIGHT: float = 0.15  # Per casualty
+const STRESS_FIREBASE_ATTACK_WEIGHT: float = 0.3
+const STRESS_SUPPLY_CRITICAL_WEIGHT: float = 0.2
+const STRESS_LOW_MORALE_WEIGHT: float = 0.25
+const LOW_STRESS_THRESHOLD: float = 0.3  # Below this = player doing well
+const HIGH_STRESS_THRESHOLD: float = 0.7  # Above this = ease off
+
 
 func _ready() -> void:
 	_find_controllers()
+	_connect_stress_signals()
 	_start_calm_phase()
-	print("[AIDirector] Initialized - Difficulty %.1f" % current_difficulty)
+	print("[AIDirector] Initialized - Difficulty %.1f, Stress System Active" % current_difficulty)
+
+
+func _connect_stress_signals() -> void:
+	"""Connect to signals that affect player stress"""
+	if BattleSignals:
+		BattleSignals.unit_died.connect(_on_player_unit_died)
+		BattleSignals.firebase_under_attack.connect(_on_firebase_attacked)
+		BattleSignals.supply_depleted.connect(_on_supply_depleted) if BattleSignals.has_signal("supply_depleted") else null
+		BattleSignals.unit_routing.connect(_on_unit_routing)
+
+
+func _on_player_unit_died(unit: Node3D, _killer: Node3D) -> void:
+	"""Track player casualties for stress"""
+	if unit.is_in_group("player_units"):
+		_recent_casualties += 1
+		player_stress = minf(player_stress + STRESS_CASUALTY_WEIGHT, 1.0)
+
+
+func _on_firebase_attacked(firebase: Node3D, _attacker: Node3D) -> void:
+	"""Firebase under attack increases stress"""
+	_firebase_under_attack = true
+	player_stress = minf(player_stress + STRESS_FIREBASE_ATTACK_WEIGHT, 1.0)
+
+
+func _on_supply_depleted() -> void:
+	"""Critical supply increases stress"""
+	_supply_critical = true
+	player_stress = minf(player_stress + STRESS_SUPPLY_CRITICAL_WEIGHT, 1.0)
+
+
+func _on_unit_routing(unit: Node3D) -> void:
+	"""Units routing increases stress"""
+	if unit.is_in_group("player_units"):
+		player_stress = minf(player_stress + STRESS_LOW_MORALE_WEIGHT, 1.0)
 
 
 func _find_controllers() -> void:
@@ -79,6 +128,9 @@ func _process(delta: float) -> void:
 	game_time += delta
 	phase_timer += delta
 
+	# Update stress system (L4D-style)
+	_update_stress(delta)
+
 	# Update difficulty over time
 	_update_difficulty(delta)
 
@@ -88,8 +140,66 @@ func _process(delta: float) -> void:
 	# Assess battlefield
 	_assess_battlefield()
 
-	# Process tension cycle
+	# Process tension cycle (adjusted by stress)
 	_process_tension_cycle(delta)
+
+
+func _update_stress(delta: float) -> void:
+	"""Update player stress level based on current conditions"""
+	# Decay casualty counter
+	_casualty_timer += delta
+	if _casualty_timer >= 30.0:
+		_casualty_timer = 0.0
+		_recent_casualties = 0
+
+	# Calculate current stress factors
+	var target_stress: float = 0.0
+
+	# Factor 1: Recent casualties
+	target_stress += minf(_recent_casualties * 0.1, 0.4)
+
+	# Factor 2: Firebase health
+	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
+	var avg_firebase_health: float = 1.0
+	if not firebases.is_empty():
+		var total_health_ratio: float = 0.0
+		for fb in firebases:
+			if fb.has_method("get") and fb.get("current_health") != null:
+				var ratio: float = fb.current_health / fb.total_health if fb.total_health > 0 else 1.0
+				total_health_ratio += ratio
+		avg_firebase_health = total_health_ratio / firebases.size()
+		target_stress += (1.0 - avg_firebase_health) * 0.3
+
+	# Factor 3: Unit health/morale
+	var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
+	var broken_count: int = 0
+	var low_health_count: int = 0
+	for unit in player_units:
+		if unit.has_method("is_morale_broken") and unit.is_morale_broken():
+			broken_count += 1
+		if unit.has_method("get") and unit.get("current_health") != null:
+			var hp_ratio: float = unit.current_health / unit.max_health if unit.max_health > 0 else 1.0
+			if hp_ratio < 0.3:
+				low_health_count += 1
+
+	if player_units.size() > 0:
+		target_stress += float(broken_count) / float(player_units.size()) * 0.3
+		target_stress += float(low_health_count) / float(player_units.size()) * 0.2
+
+	# Factor 4: Enemy pressure
+	if enemy_unit_count > player_unit_count * 1.5:
+		target_stress += 0.2
+
+	# Smoothly interpolate stress toward target
+	if target_stress > player_stress:
+		player_stress = minf(player_stress + delta * 0.2, target_stress)
+	else:
+		player_stress = maxf(player_stress - STRESS_DECAY_RATE * delta, target_stress)
+
+	player_stress = clampf(player_stress, 0.0, 1.0)
+
+	# Clear temporary flags
+	_firebase_under_attack = false
 
 
 func _update_difficulty(delta: float) -> void:
@@ -179,9 +289,18 @@ func _assess_battlefield() -> void:
 	enemy_strength = enemy_health_total
 
 
-func _process_tension_cycle(delta: float) -> void:
-	"""Process the tension/release cycle"""
-	if phase_timer >= current_phase_duration:
+func _process_tension_cycle(_delta: float) -> void:
+	"""Process the tension/release cycle (stress-adjusted)"""
+	# High stress = extend calm phases, delay assaults
+	var stress_time_modifier: float = 1.0
+	if player_stress > HIGH_STRESS_THRESHOLD:
+		stress_time_modifier = 1.5  # 50% longer calm/aftermath when overwhelmed
+	elif player_stress < LOW_STRESS_THRESHOLD:
+		stress_time_modifier = 0.8  # 20% shorter calm when player is dominating
+
+	var adjusted_duration: float = current_phase_duration * stress_time_modifier
+
+	if phase_timer >= adjusted_duration:
 		_advance_tension_phase()
 
 
@@ -231,7 +350,7 @@ func _start_buildup_phase() -> void:
 
 
 func _start_assault_phase() -> void:
-	"""Begin main assault"""
+	"""Begin main assault (stress-adjusted intensity)"""
 	tension_phase = TensionPhase.ASSAULT
 	phase_timer = 0.0
 
@@ -241,13 +360,24 @@ func _start_assault_phase() -> void:
 	# Select assault target
 	assault_target = _select_assault_target()
 
-	# Full aggression
-	_set_enemy_aggression(0.9)
+	# Aggression scaled by inverse of stress (high stress = lighter attacks)
+	var aggression: float = 0.9
+	if player_stress > HIGH_STRESS_THRESHOLD:
+		aggression = 0.5  # Lighter assault when player is overwhelmed
+		print("[AIDirector] High stress detected (%.2f) - reducing assault intensity" % player_stress)
+	elif player_stress < LOW_STRESS_THRESHOLD:
+		aggression = 1.0  # Full assault when player is dominating
+		print("[AIDirector] Low stress detected (%.2f) - full assault intensity" % player_stress)
+
+	_set_enemy_aggression(aggression)
 
 	# Order coordinated assault
 	_order_main_assault()
 
-	print("[AIDirector] ASSAULT PHASE - Target: %s" % (assault_target.name if assault_target else "player"))
+	print("[AIDirector] ASSAULT PHASE - Target: %s, Stress: %.2f" % [
+		assault_target.name if assault_target else "player",
+		player_stress
+	])
 
 
 func _start_aftermath_phase() -> void:
@@ -458,3 +588,20 @@ func get_player_strength() -> float:
 
 func get_enemy_strength() -> float:
 	return enemy_strength
+
+
+func get_player_stress() -> float:
+	"""Get current player stress level (0.0 = relaxed, 1.0 = overwhelmed)"""
+	return player_stress
+
+
+func get_stress_level_name() -> String:
+	"""Get human-readable stress level"""
+	if player_stress < LOW_STRESS_THRESHOLD:
+		return "Relaxed"
+	elif player_stress < 0.5:
+		return "Moderate"
+	elif player_stress < HIGH_STRESS_THRESHOLD:
+		return "Stressed"
+	else:
+		return "Overwhelmed"

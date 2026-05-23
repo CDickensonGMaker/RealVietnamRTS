@@ -5,7 +5,7 @@ extends Node3D
 ## Shows a grid pattern during area selection that follows the terrain height.
 ## Updates at capped rate (30Hz) for performance.
 
-const JobTypes = preload("res://firebase_system/jobs/job_types.gd")
+const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
 const MilitaryTheme = preload("res://battle_system/ui/military_theme.gd")
 
 ## Grid spacing in meters
@@ -32,7 +32,7 @@ var outline_material: StandardMaterial3D
 
 ## State
 var _update_timer: float = 0.0
-var _current_job_type: JobTypes.JobType = JobTypes.JobType.CLEAR_TERRAIN
+var _current_job_type: UnifiedJob.Type = UnifiedJob.Type.CLEAR_TERRAIN
 var _is_valid_placement: bool = true
 var _area_bounds: Rect2 = Rect2()  # X, Z coordinates
 var _polyline_points: PackedVector3Array = PackedVector3Array()
@@ -426,13 +426,13 @@ func _update_color() -> void:
 		color = COLOR_INVALID
 	else:
 		match _current_job_type:
-			JobTypes.JobType.CLEAR_TERRAIN:
+			UnifiedJob.Type.CLEAR_TERRAIN:
 				color = COLOR_CLEAR
-			JobTypes.JobType.FLATTEN_AREA:
+			UnifiedJob.Type.FLATTEN_AREA:
 				color = COLOR_FLATTEN
-			JobTypes.JobType.BUILD_ROAD:
+			UnifiedJob.Type.BUILD_ROAD:
 				color = COLOR_ROAD
-			JobTypes.JobType.BUILD_STRUCTURE:
+			UnifiedJob.Type.BUILD_STRUCTURE:
 				color = COLOR_BUILD
 			_:
 				color = COLOR_CLEAR
@@ -456,7 +456,7 @@ func _get_terrain_height(pos: Vector3) -> float:
 
 
 ## Show area preview
-func show_area(bounds: Rect2, job_type: JobTypes.JobType, is_valid: bool = true) -> void:
+func show_area(bounds: Rect2, job_type: UnifiedJob.Type, is_valid: bool = true) -> void:
 	_preview_mode = 0
 	_area_bounds = bounds
 	_current_job_type = job_type
@@ -466,7 +466,7 @@ func show_area(bounds: Rect2, job_type: JobTypes.JobType, is_valid: bool = true)
 
 
 ## Show polyline preview
-func show_polyline(points: PackedVector3Array, job_type: JobTypes.JobType, is_valid: bool = true) -> void:
+func show_polyline(points: PackedVector3Array, job_type: UnifiedJob.Type, is_valid: bool = true) -> void:
 	_preview_mode = 1
 	_polyline_points = points
 	_current_job_type = job_type
@@ -476,7 +476,7 @@ func show_polyline(points: PackedVector3Array, job_type: JobTypes.JobType, is_va
 
 
 ## Show single placement preview
-func show_single(position: Vector3, job_type: JobTypes.JobType, is_valid: bool = true) -> void:
+func show_single(position: Vector3, job_type: UnifiedJob.Type, is_valid: bool = true) -> void:
 	_preview_mode = 2
 	_single_position = position
 	_current_job_type = job_type
@@ -486,7 +486,7 @@ func show_single(position: Vector3, job_type: JobTypes.JobType, is_valid: bool =
 
 
 ## Show wall line preview (for sandbags, trenches, wire)
-func show_wall_line(start_pos: Vector3, end_pos: Vector3, job_type: JobTypes.JobType,
+func show_wall_line(start_pos: Vector3, end_pos: Vector3, job_type: UnifiedJob.Type,
 		segment_spacing: float = 2.0, is_valid: bool = true) -> void:
 	_preview_mode = 3
 	_wall_line_start = start_pos

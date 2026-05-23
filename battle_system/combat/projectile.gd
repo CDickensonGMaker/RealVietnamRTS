@@ -9,6 +9,7 @@ signal expired
 
 const VietnamWeaponDataScript = preload("res://battle_system/data/vietnam_weapon_data.gd")
 const DamageSystemScript = preload("res://terrain/systems/damage_system.gd")
+const ImpactEffectsScript = preload("res://battle_system/effects/impact_effects.gd")
 
 enum ProjectileType {
 	BULLET,         # Fast, direct, tracer trail
@@ -24,6 +25,20 @@ var velocity: Vector3 = Vector3.ZERO
 var gravity: float = 9.8
 var lifetime: float = 2.0
 var elapsed_time: float = 0.0
+
+## Rocket motor properties
+var rocket_thrust: float = 40.0          # Acceleration while motor burns (m/s²)
+var rocket_burn_time: float = 1.2        # How long the motor burns (seconds)
+var _motor_burning: bool = false
+
+## Bomb physics (includes plane velocity)
+var initial_forward_velocity: Vector3 = Vector3.ZERO
+var drag_coefficient: float = 0.02       # Air resistance
+
+## Ballistic drift (subtle random deviation during flight)
+var _drift_direction: Vector3 = Vector3.ZERO
+var _drift_strength: float = 0.0
+var _tumble_rate: float = 0.0
 
 ## Damage properties
 var damage: float = 15.0
@@ -64,6 +79,9 @@ var weapon_category: int = -1
 
 ## Pooling
 var _is_active: bool = false
+
+## Impact effects system reference (set by ProjectilePool)
+var impact_effects: Node = null
 
 ## Components
 var _mesh: MeshInstance3D = null
@@ -180,12 +198,69 @@ func _process_flat_trajectory(delta: float) -> void:
 
 
 func _process_arcing_trajectory(delta: float) -> void:
-	# Parabolic arc for grenades/rockets
+	# Rockets: thrust acceleration while motor burns, then coast with gravity
+	# Grenades: just parabolic arc
+	if projectile_type == ProjectileType.ROCKET:
+		_process_rocket_physics(delta)
+		return
+
+	# Parabolic arc for grenades
 	velocity.y -= gravity * delta
 	global_position += velocity * delta
 
 	if velocity.length_squared() > 0.01:
 		look_at(global_position + velocity, Vector3.UP)
+
+
+func _process_rocket_physics(delta: float) -> void:
+	# Rocket motor physics - accelerate while burning, then coast
+	if elapsed_time < rocket_burn_time:
+		# Motor is burning - accelerate along flight direction
+		_motor_burning = true
+		var thrust_dir: Vector3 = velocity.normalized() if velocity.length_squared() > 0.01 else Vector3.FORWARD
+
+		# Apply drift during burn (slight aim deviation, asymmetric thrust)
+		if _drift_strength > 0.0:
+			thrust_dir += _drift_direction * _drift_strength * 0.02
+			thrust_dir = thrust_dir.normalized()
+
+		velocity += thrust_dir * rocket_thrust * delta
+
+		# Slight gravity during burn (rocket fights gravity)
+		velocity.y -= gravity * 0.3 * delta
+	else:
+		# Motor burned out - coast with full gravity
+		if _motor_burning:
+			_motor_burning = false
+			# Trail changes when motor burns out (smoke instead of fire)
+			if trail_enabled and _trail and _trail.process_material:
+				var mat: ParticleProcessMaterial = _trail.process_material as ParticleProcessMaterial
+				if mat:
+					mat.color = Color(0.3, 0.3, 0.3, 0.5)  # Smoke instead of fire
+					mat.scale_min = 0.05
+					mat.scale_max = 0.08
+
+		velocity.y -= gravity * delta
+
+		# Apply drift during coast (no thrust to correct)
+		if _drift_strength > 0.0:
+			velocity += _drift_direction * _drift_strength * 0.5 * delta
+
+		# Light drag during coast
+		var speed: float = velocity.length()
+		if speed > 0.1:
+			var drag_decel: float = 0.01 * speed * delta
+			velocity -= velocity.normalized() * drag_decel
+
+	global_position += velocity * delta
+
+	# Rockets point along velocity
+	if velocity.length_squared() > 0.01:
+		var look_dir: Vector3 = velocity.normalized()
+		var up: Vector3 = Vector3.UP
+		if abs(look_dir.dot(Vector3.UP)) > 0.99:
+			up = Vector3.FORWARD
+		look_at(global_position + look_dir, up)
 
 
 func _process_high_arc_trajectory(_delta: float) -> void:
@@ -215,22 +290,57 @@ func _process_high_arc_trajectory(_delta: float) -> void:
 
 
 func _process_diving_trajectory(delta: float) -> void:
-	# Aircraft bombing run - steep descent
-	velocity.y -= gravity * 0.5 * delta
+	# Bomb physics - real gravity with air drag
+	# Bombs inherit plane's forward velocity and fall under gravity
+	velocity.y -= gravity * delta
+
+	# Apply ballistic drift (wind, imperfect release, asymmetric bomb)
+	if _drift_strength > 0.0:
+		velocity += _drift_direction * _drift_strength * delta
+
+	# Apply drag (reduces horizontal speed over time, limits terminal velocity)
+	var speed: float = velocity.length()
+	if speed > 0.1:
+		var drag_force: float = drag_coefficient * speed * speed
+		var drag_decel: float = minf(drag_force * delta, speed * 0.1)  # Cap drag
+		velocity -= velocity.normalized() * drag_decel
+
 	global_position += velocity * delta
 
+	# Bomb tumbles slightly in flight
+	if _tumble_rate > 0.0:
+		rotation.x += delta * _tumble_rate
+		rotation.z += delta * _tumble_rate * 0.7
+
 	if velocity.length_squared() > 0.01:
-		look_at(global_position + velocity, Vector3.UP)
+		var look_dir: Vector3 = velocity.normalized()
+		var up: Vector3 = Vector3.UP
+		if abs(look_dir.dot(Vector3.UP)) > 0.99:
+			up = Vector3.FORWARD
+		look_at(global_position + look_dir, up)
 
 
 func _process_napalm_trajectory(delta: float) -> void:
-	# Napalm tumbles and spreads
-	velocity.y -= gravity * 0.3 * delta
+	# Napalm canister physics - real gravity, tumbles heavily
+	velocity.y -= gravity * delta
+
+	# Apply ballistic drift (wind, tumbling affects trajectory)
+	if _drift_strength > 0.0:
+		velocity += _drift_direction * _drift_strength * delta
+
+	# Napalm has higher drag due to canister shape
+	var speed: float = velocity.length()
+	if speed > 0.1:
+		var drag_force: float = drag_coefficient * 1.5 * speed * speed  # Higher drag
+		var drag_decel: float = minf(drag_force * delta, speed * 0.15)
+		velocity -= velocity.normalized() * drag_decel
+
 	global_position += velocity * delta
 
-	# Tumble rotation
-	rotation.x += delta * 2.0
-	rotation.z += delta * 1.5
+	# Napalm tumbles aggressively (use tumble rate + base tumble)
+	var tumble: float = 3.0 + _tumble_rate
+	rotation.x += delta * tumble
+	rotation.z += delta * tumble * 0.8
 
 
 func _on_body_entered(body: Node3D) -> void:
@@ -275,6 +385,10 @@ func _on_hit(target: Node) -> void:
 	# Emit impact signal
 	impact.emit(global_position, target)
 
+	# Spawn impact visual effect
+	if impact_effects and impact_effects.has_method("spawn_for_projectile"):
+		impact_effects.spawn_for_projectile(global_position, target, weapon_category, aoe_radius)
+
 	# AOE damage
 	if aoe_radius > 0.0:
 		_apply_aoe_damage(global_position)
@@ -290,6 +404,10 @@ func _on_hit(target: Node) -> void:
 
 func _on_ground_impact() -> void:
 	impact.emit(global_position, null)
+
+	# Spawn impact visual effect (ground hit)
+	if impact_effects and impact_effects.has_method("spawn_for_projectile"):
+		impact_effects.spawn_for_projectile(global_position, null, weapon_category, aoe_radius)
 
 	# AOE damage on ground impact
 	if aoe_radius > 0.0:
@@ -419,6 +537,7 @@ func fire(config: Dictionary) -> void:
 	elapsed_time = 0.0
 	pierce_count = 0
 	visible = true
+	_motor_burning = false
 
 	# Position
 	global_position = config.get("start_position", Vector3.ZERO)
@@ -430,15 +549,30 @@ func fire(config: Dictionary) -> void:
 	source_faction = config.get("source_faction", 0)
 	target_node = config.get("target_node", null)
 
+	# Inherit source velocity for bombs/napalm (dropped from moving aircraft)
+	initial_forward_velocity = config.get("source_velocity", Vector3.ZERO)
+
 	# Flight properties
 	var speed: float = config.get("speed", 300.0)
 	lifetime = config.get("lifetime", 2.0)
 	trajectory = config.get("trajectory", VietnamWeaponDataScript.Trajectory.FLAT)
 	arc_height = config.get("arc_height", 0.0)
 
+	# Rocket motor config
+	rocket_thrust = config.get("rocket_thrust", 40.0)
+	rocket_burn_time = config.get("rocket_burn_time", 1.2)
+
 	# Calculate initial velocity
 	var direction: Vector3 = (target_position - start_position).normalized()
 	velocity = direction * speed
+
+	# For diving/napalm trajectories, add source velocity (bomb inherits plane motion)
+	if trajectory == VietnamWeaponDataScript.Trajectory.DIVING or \
+	   trajectory == VietnamWeaponDataScript.Trajectory.NAPALM:
+		velocity += initial_forward_velocity
+
+	# Initialize ballistic drift (subtle random deviation during flight)
+	_init_ballistic_drift()
 
 	# Add scatter
 	var scatter: float = config.get("scatter_angle", 0.0)
@@ -488,6 +622,36 @@ func fire(config: Dictionary) -> void:
 	# Start trail
 	if trail_enabled:
 		_trail.emitting = true
+
+
+## Initialize ballistic drift based on projectile type.
+## Bombs and rockets have subtle random deviation during flight.
+func _init_ballistic_drift() -> void:
+	match trajectory:
+		VietnamWeaponDataScript.Trajectory.DIVING:
+			# Bombs: slight lateral drift simulating wind/imperfect release
+			_drift_direction = Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0)).normalized()
+			_drift_strength = randf_range(0.5, 2.0)  # m/s of drift
+			_tumble_rate = randf_range(0.3, 0.8)  # Slight tumble
+
+		VietnamWeaponDataScript.Trajectory.NAPALM:
+			# Napalm: more tumble due to canister shape
+			_drift_direction = Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0)).normalized()
+			_drift_strength = randf_range(1.0, 3.0)
+			_tumble_rate = randf_range(0.8, 1.5)
+
+		VietnamWeaponDataScript.Trajectory.ARCING:
+			# Rockets: thrust variation and slight aim deviation
+			_drift_direction = Vector3(randf_range(-1.0, 1.0), randf_range(-0.5, 0.5), randf_range(-1.0, 1.0)).normalized()
+			_drift_strength = randf_range(0.3, 1.5)  # Less drift than bombs
+			_tumble_rate = 0.0  # Rockets don't tumble (fins stabilize)
+			# Slight thrust variation (some rockets burn hotter)
+			rocket_thrust *= randf_range(0.95, 1.05)
+
+		_:
+			_drift_direction = Vector3.ZERO
+			_drift_strength = 0.0
+			_tumble_rate = 0.0
 
 
 func _update_visuals() -> void:

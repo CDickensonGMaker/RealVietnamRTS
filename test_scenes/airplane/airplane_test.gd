@@ -2,18 +2,21 @@ extends Node3D
 ## Airplane Test Scene
 ##
 ## Tests the Airplane + Airport system:
+## - Multiple plane types with visual ordnance models
 ## - Takeoff from runway
 ## - Patrol to a point
 ## - Attack runs with selectable ordnance: bombs / napalm / rockets / cannon
+## - Real physics: bombs fall with gravity, rockets accelerate with thrust
 ## - Return to base when ordnance depleted or fuel low
-## - Refuel/rearm cycle at airport
+## - Refuel/rearm cycle at airport (ordnance visuals restore)
 ##
 ## Controls:
+## - [ / ]: cycle through plane types (A-1 Skyraider, A-4 Skyhawk, F-4 Phantom, etc.)
 ## - T: take off
 ## - P: patrol to current cursor position
-## - 1: bomb run on cursor position
-## - 2: napalm run on cursor position
-## - 3: rocket run on cursor position
+## - 1: bomb run on cursor position (gravity physics)
+## - 2: napalm run on cursor position (gravity physics)
+## - 3: rocket run on cursor position (thrust acceleration)
 ## - 4: cannon strafe on cursor position
 ## - R: return to base
 ## - F: spawn target zone (visual marker for bombing practice)
@@ -24,6 +27,32 @@ const Airport = preload("res://airplane_system/airport.gd")
 const Squad = preload("res://battle_system/nodes/squad.gd")
 const SquadData = preload("res://battle_system/data/squad_data.gd")
 
+## Available plane models for testing
+const PLANE_MODELS: Array[Dictionary] = [
+	{
+		"name": "A-1 Skyraider",
+		"path": "res://assets/models/units/aircraft/a1_skyraider.glb",
+		"scale": Vector3(0.5, 0.5, 0.5),
+		"bombs": 8, "napalm": 2, "rockets": 19, "cannon": 200,
+		"cannon_weapon": "cannon_20mm"  # 4x 20mm cannons
+	},
+	{
+		"name": "A-4 Skyhawk",
+		"path": "res://assets/models/units/aircraft/a4_skyhawk.glb",
+		"scale": Vector3(0.5, 0.5, 0.5),
+		"bombs": 6, "napalm": 2, "rockets": 38, "cannon": 200,
+		"cannon_weapon": "cannon_20mm"  # 2x 20mm Mk 12 cannons
+	},
+	{
+		"name": "F-4E Phantom",
+		"path": "res://assets/models/units/aircraft/f4_phantom.glb",
+		"scale": Vector3(0.5, 0.5, 0.5),
+		"bombs": 8, "napalm": 4, "rockets": 38, "cannon": 640,
+		"cannon_weapon": "m61_vulcan"  # M61 Vulcan 6000 RPM!
+	},
+]
+
+var current_plane_index: int = 0
 var hud: Label
 var camera: Camera3D = null
 var airport: Airport = null
@@ -59,28 +88,15 @@ func _ready() -> void:
 		airport_pos.y = terrain.get_height_at(airport_pos)
 	airport.global_position = airport_pos
 
-	# F-4 style fighter-bomber at the airport
-	plane = Airplane.new()
-	plane.name = "F-4 Phantom"
-	plane.set_airport(airport.get_parking_spot(), airport.get_runway_heading_rad())
-	add_child(plane)
-	airport.park_aircraft(plane)
-
-	# Connect signals for logging
-	plane.took_off.connect(_on_took_off)
-	plane.landed_at_airport.connect(_on_landed)
-	plane.attack_run_started.connect(_on_attack_started)
-	plane.attack_run_completed.connect(_on_attack_completed)
-	plane.ordnance_depleted.connect(_on_ordnance_depleted)
-	plane.refuel_complete.connect(_on_refuel_complete)
+	# Create plane with selected model
+	_spawn_plane_with_model(current_plane_index)
 
 	# Pre-place some target zones to practice on
 	_spawn_target_zone(Vector3(-200, 0, -300), "Bridge")
 	_spawn_target_zone(Vector3(100, 0, -500), "Bunker Complex")
 	_spawn_target_zone(Vector3(-400, 0, -200), "VC Base")
 
-	print("[AirplaneTest] %s parked at %s" % [plane.name, airport.airport_name])
-	print("[AirplaneTest] Press T to take off. Then 1/2/3/4 to drop ordnance at cursor.")
+	print("[AirplaneTest] Press [ or ] to change plane. T to take off. 1/2/3/4 to drop ordnance.")
 
 
 func _spawn_target_zone(pos: Vector3, label_text: String) -> Node3D:
@@ -120,6 +136,59 @@ func _spawn_target_zone(pos: Vector3, label_text: String) -> Node3D:
 	return zone
 
 
+func _spawn_plane_with_model(index: int) -> void:
+	# Remove old plane if exists
+	if plane:
+		plane.queue_free()
+		plane = null
+
+	var model_data: Dictionary = PLANE_MODELS[index]
+
+	plane = Airplane.new()
+	plane.name = model_data["name"]
+
+	# Set ordnance counts from model data
+	plane.bomb_count = model_data.get("bombs", 4)
+	plane.napalm_count = model_data.get("napalm", 2)
+	plane.rocket_pods = model_data.get("rockets", 19)
+	plane.cannon_rounds = model_data.get("cannon", 200)
+	plane.cannon_weapon_id = model_data.get("cannon_weapon", "cannon_20mm")
+
+	# Try to load the 3D model
+	var model_path: String = model_data["path"]
+	if ResourceLoader.exists(model_path):
+		var model_scene: PackedScene = load(model_path)
+		if model_scene:
+			var model: Node3D = model_scene.instantiate()
+			model.name = "Model"
+			model.scale = model_data.get("scale", Vector3(0.5, 0.5, 0.5))
+			plane.add_child(model)
+			print("[AirplaneTest] Loaded %s model with visual ordnance" % model_data["name"])
+	else:
+		print("[AirplaneTest] Model not found: %s - using placeholder" % model_path)
+
+	plane.set_airport(airport.get_parking_spot(), airport.get_runway_heading_rad())
+	add_child(plane)
+	airport.park_aircraft(plane)
+
+	# Connect signals for logging
+	plane.took_off.connect(_on_took_off)
+	plane.landed_at_airport.connect(_on_landed)
+	plane.attack_run_started.connect(_on_attack_started)
+	plane.attack_run_completed.connect(_on_attack_completed)
+	plane.ordnance_depleted.connect(_on_ordnance_depleted)
+	plane.refuel_complete.connect(_on_refuel_complete)
+
+	print("[AirplaneTest] %s parked at %s" % [plane.name, airport.airport_name])
+
+
+func _cycle_plane(direction: int) -> void:
+	current_plane_index = (current_plane_index + direction) % PLANE_MODELS.size()
+	if current_plane_index < 0:
+		current_plane_index = PLANE_MODELS.size() - 1
+	_spawn_plane_with_model(current_plane_index)
+
+
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		var pos: Vector3 = _raycast_ground((event as InputEventMouseMotion).position)
@@ -139,6 +208,12 @@ func _input(event: InputEvent) -> void:
 		KEY_F:
 			# Spawn a new target zone where the cursor is
 			_spawn_target_zone(last_cursor_ground, "Target %d" % target_zones.size())
+		KEY_BRACKETLEFT:
+			# Previous plane type
+			_cycle_plane(-1)
+		KEY_BRACKETRIGHT:
+			# Next plane type
+			_cycle_plane(1)
 
 
 func _take_off() -> void:
@@ -223,7 +298,8 @@ func _raycast_ground(screen_pos: Vector2) -> Vector3:
 func _process(_delta: float) -> void:
 	if not hud:
 		return
-	var lines: Array = ["AIRPLANE TEST"]
+	var model_data: Dictionary = PLANE_MODELS[current_plane_index]
+	var lines: Array = ["AIRPLANE TEST - %s (%d/%d)" % [model_data["name"], current_plane_index + 1, PLANE_MODELS.size()]]
 	if plane:
 		var s: Dictionary = plane.get_ordnance_summary()
 		lines.append("Plane state: %s" % plane.get_state_name())
@@ -235,7 +311,7 @@ func _process(_delta: float) -> void:
 	lines.append("Targets: %d" % target_zones.size())
 	lines.append("Cursor ground: %s" % last_cursor_ground)
 	lines.append("")
-	lines.append("T: takeoff   P: patrol to cursor   R: return to base")
+	lines.append("[ / ]: change plane type   T: takeoff   P: patrol   R: RTB")
 	lines.append("1: BOMB   2: NAPALM   3: ROCKETS   4: CANNON   (drops at cursor)")
 	lines.append("F: spawn target zone at cursor")
 	hud.text = "\n".join(lines)

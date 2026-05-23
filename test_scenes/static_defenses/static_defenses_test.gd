@@ -22,6 +22,8 @@ const Trench = preload("res://fortification_system/trench.gd")
 const Artillery = preload("res://battle_system/units/artillery.gd")
 const Squad = preload("res://battle_system/nodes/squad.gd")
 const SquadData = preload("res://battle_system/data/squad_data.gd")
+const MachineGunNest = preload("res://fortification_system/machine_gun_nest.gd")
+const MortarPit = preload("res://fortification_system/mortar_pit.gd")
 # Existing user assets
 const AAEmplacement = preload("res://battle_system/ai/aa_emplacement.gd")
 
@@ -30,6 +32,7 @@ var camera: Camera3D = null
 var bunkers: Array[Node3D] = []
 var trenches: Array[Node3D] = []
 var aa_guns: Array[Node3D] = []
+var mg_nests: Array[Node3D] = []
 var mortar_pits: Array[Node3D] = []
 var static_arty: Array[Node3D] = []
 var player_squads: Array[Node3D] = []
@@ -71,33 +74,44 @@ func _build_defensive_line() -> void:
 		b.global_position = bunker_pos
 		bunkers.append(b)
 
-	# MG nest on each flank
+	# MG nest on each flank - uses new auto-firing MachineGunNest class
 	for i in 2:
-		var nest: Bunker = Bunker.new()
-		nest.bunker_type = Bunker.BunkerType.MACHINE_GUN_NEST
-		nest.bunker_name = "MG Nest %s" % ("West" if i == 0 else "East")
+		var nest: MachineGunNest = MachineGunNest.new()
+		nest.name = "MG Nest %s" % ("West" if i == 0 else "East")
 		nest.firing_arc_degrees = 120.0
-		nest.firing_arc_yaw_degrees = 180.0
-		nest.max_garrison_capacity = 1
+		nest.is_player_controlled = true
 		add_child(nest)
 		var nest_pos := Vector3(-50.0 + float(i) * 100.0, 0.0, 5.0)
 		if terrain and terrain.has_method("get_height_at"):
 			nest_pos.y = terrain.get_height_at(nest_pos)
 		nest.global_position = nest_pos
-		bunkers.append(nest)
+		# Rotate to face north (-Z direction)
+		nest.rotation.y = PI
+		mg_nests.append(nest)
 
-	# Mortar pit behind the line
-	var pit: Bunker = Bunker.new()
-	pit.bunker_type = Bunker.BunkerType.MORTAR_PIT
-	pit.bunker_name = "Mortar Pit"
-	pit.firing_arc_degrees = 360.0  # Mortar can indirect-fire any direction
-	pit.max_garrison_capacity = 1
+	# Mortar pit behind the line - uses auto-firing MortarPit class
+	var pit: MortarPit = MortarPit.new()
+	pit.name = "Mortar Pit Alpha"
+	pit.is_player_controlled = true
+	pit.detection_radius = 300.0  # Detect enemies within 300m
 	add_child(pit)
 	var pit_pos := Vector3(0.0, 0.0, 25.0)
 	if terrain and terrain.has_method("get_height_at"):
 		pit_pos.y = terrain.get_height_at(pit_pos)
 	pit.global_position = pit_pos
 	mortar_pits.append(pit)
+
+	# Second mortar pit on the east flank
+	var pit2: MortarPit = MortarPit.new()
+	pit2.name = "Mortar Pit Bravo"
+	pit2.is_player_controlled = true
+	pit2.detection_radius = 300.0
+	add_child(pit2)
+	var pit2_pos := Vector3(40.0, 0.0, 30.0)
+	if terrain and terrain.has_method("get_height_at"):
+		pit2_pos.y = terrain.get_height_at(pit2_pos)
+	pit2.global_position = pit2_pos
+	mortar_pits.append(pit2)
 
 	# Trench running between bunker A and bunker B
 	var trench: Trench = Trench.new()
@@ -109,8 +123,7 @@ func _build_defensive_line() -> void:
 		Vector3(10.0, 0.0, -3.0),
 		Vector3(25.0, 0.0, -3.0),
 	])
-	# Snap each point to terrain
-	var terrain := get_node_or_null("/root/TerrainIntegration")
+	# Snap each point to terrain (reuse terrain var from above)
 	if terrain and terrain.has_method("get_height_at"):
 		var snapped: PackedVector3Array = PackedVector3Array()
 		for p in trench_pts:
@@ -388,11 +401,67 @@ func _process(_delta: float) -> void:
 	if not hud:
 		return
 	var lines: Array = ["STATIC DEFENSES TEST"]
-	lines.append("Bunkers: %d  Trenches: %d  AA: %d  Mortars: %d" % [bunkers.size(), trenches.size(), aa_guns.size(), mortar_pits.size()])
+	lines.append("Bunkers: %d  MG Nests: %d  Trenches: %d  AA: %d" % [bunkers.size(), mg_nests.size(), trenches.size(), aa_guns.size()])
 	lines.append("Squads: %d  Enemies: %d" % [player_squads.size(), enemies.size()])
+
+	# Bunker garrison status (now with auto-fire)
 	for b in bunkers:
 		if is_instance_valid(b):
-			lines.append("  %s: %d/%d garrison" % [b.bunker_name, b.garrison.size(), b.max_garrison_capacity])
+			var bunker_target: String = "---"
+			if b.current_target and is_instance_valid(b.current_target):
+				bunker_target = b.current_target.name
+			var suppressed: String = " (SUPPRESSED)" if b._is_suppressed else ""
+			lines.append("  %s: %d/%d garrison Target: %s%s" % [
+				b.bunker_name,
+				b.garrison.size(),
+				b.max_garrison_capacity,
+				bunker_target,
+				suppressed
+			])
+
+	# MG Nest auto-fire status
+	for mg in mg_nests:
+		if is_instance_valid(mg):
+			var target_name: String = "---"
+			if mg.current_target and is_instance_valid(mg.current_target):
+				target_name = mg.current_target.name
+			lines.append("  %s: [%s] Ammo: %d/%d Crew: %d/%d Target: %s" % [
+				mg.name,
+				mg.get_state_name(),
+				mg.ammo_remaining,
+				mg.magazine_size,
+				mg._crew_alive,
+				mg.crew_size,
+				target_name
+			])
+
+	# Mortar Pit status
+	for pit in mortar_pits:
+		if is_instance_valid(pit):
+			var pit_target: String = "---"
+			if pit.current_target and is_instance_valid(pit.current_target):
+				pit_target = pit.current_target.name
+			elif pit.target_position != Vector3.INF:
+				pit_target = "(%.0f, %.0f)" % [pit.target_position.x, pit.target_position.z]
+			lines.append("  %s: [%s] Ammo: %d/%d Crew: %d/%d Pending: %d Target: %s" % [
+				pit.name,
+				pit.get_state_name(),
+				pit.ammo_remaining,
+				pit.magazine_size,
+				pit._crew_alive,
+				pit.crew_size,
+				pit.get_pending_rounds(),
+				pit_target
+			])
+
+	# AA status
+	for aa in aa_guns:
+		if is_instance_valid(aa):
+			var aa_target: String = "---"
+			if aa.current_target and is_instance_valid(aa.current_target):
+				aa_target = aa.current_target.name
+			lines.append("  AA: [%s] Ammo: %d Target: %s" % [aa.get_state_name(), aa.ammo_remaining, aa_target])
+
 	lines.append("")
 	lines.append("L-click squad to select, R-click bunker/trench to garrison")
 	lines.append("1: enemy infantry  2: helicopter (AA test)  3: distant target (static arty)")

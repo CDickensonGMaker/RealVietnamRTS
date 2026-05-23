@@ -7,14 +7,11 @@ const MilitaryTheme = preload("res://battle_system/ui/military_theme.gd")
 const CursorModeScript = preload("res://battle_system/ui/cursor_mode.gd")
 const PaintedAreaPreview = preload("res://battle_system/ui/painted_area_preview.gd")
 const PaintableCommand = preload("res://battle_system/ui/paintable_command.gd")
-const JobTypes = preload("res://firebase_system/jobs/job_types.gd")
+const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-
-## Update rate (30Hz for smooth cursor following)
-const UPDATE_INTERVAL: float = 0.033
 
 ## Circle segments for range indicators
 const CIRCLE_SEGMENTS: int = 32
@@ -29,7 +26,6 @@ const PATH_HEIGHT_OFFSET: float = 0.5
 var _current_mode: int = CursorModeScript.Mode.NORMAL
 var _cursor_world_pos: Vector3 = Vector3.ZERO
 var _selected_units: Array[Node3D] = []
-var _update_timer: float = 0.0
 
 ## Mode-specific context data
 var _context: Dictionary = {}
@@ -59,16 +55,14 @@ func _ready() -> void:
 	visible = false
 
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	if _current_mode == CursorModeScript.Mode.NORMAL:
 		visible = false
 		return
 
-	_update_timer -= delta
-	if _update_timer <= 0.0:
-		_update_timer = UPDATE_INTERVAL
-		_update_cursor_position()
-		_rebuild_overlay()
+	# Update every frame for precise mouse tracking
+	_update_cursor_position()
+	_rebuild_overlay()
 
 
 func _setup_meshes() -> void:
@@ -162,15 +156,15 @@ func _rebuild_overlay() -> void:
 			_draw_garrison_targets()
 		# Paint modes
 		CursorModeScript.Mode.PAINT_CLEAR:
-			_update_paint_preview(JobTypes.JobType.CLEAR_TERRAIN)
+			_update_paint_preview(UnifiedJob.Type.CLEAR_TERRAIN)
 		CursorModeScript.Mode.PAINT_FLATTEN:
-			_update_paint_preview(JobTypes.JobType.FLATTEN_AREA)
+			_update_paint_preview(UnifiedJob.Type.FLATTEN_AREA)
 		CursorModeScript.Mode.PAINT_ROAD:
-			_update_paint_preview(JobTypes.JobType.BUILD_ROAD)
+			_update_paint_preview(UnifiedJob.Type.BUILD_ROAD)
 		CursorModeScript.Mode.PAINT_BUILD:
-			_update_paint_preview(JobTypes.JobType.BUILD_STRUCTURE)
+			_update_paint_preview(UnifiedJob.Type.BUILD_STRUCTURE)
 		CursorModeScript.Mode.PAINT_FILL:
-			_update_paint_preview(JobTypes.JobType.FILL_CRATER)
+			_update_paint_preview(UnifiedJob.Type.FILL_CRATER)
 		CursorModeScript.Mode.PAINT_DOZER_LINE:
 			_draw_dozer_line_preview()
 
@@ -441,7 +435,7 @@ func set_mode(mode: int, context: Dictionary = {}) -> void:
 	visible = CursorModeScript.shows_overlay(mode)
 
 	if visible:
-		_update_timer = 0.0  # Force immediate update
+		_update_cursor_position()  # Immediate update for responsiveness
 
 
 ## Update the selected units for path drawing
@@ -450,7 +444,10 @@ func set_selected_units(units: Array[Node3D]) -> void:
 
 
 ## Get current cursor world position
-func get_cursor_position() -> Vector3:
+## If force_update is true, performs a fresh raycast instead of using cached position
+func get_cursor_position(force_update: bool = false) -> Vector3:
+	if force_update:
+		_update_cursor_position()
 	return _cursor_world_pos
 
 
@@ -475,14 +472,14 @@ func is_cursor_valid() -> bool:
 # =============================================================================
 
 ## Update paint area preview based on context
-func _update_paint_preview(job_type: JobTypes.JobType) -> void:
+func _update_paint_preview(job_type: UnifiedJob.Type) -> void:
 	if not _paint_preview:
 		return
 
 	var is_valid: bool = _context.get("placement_valid", true)
 
 	match job_type:
-		JobTypes.JobType.CLEAR_TERRAIN, JobTypes.JobType.FLATTEN_AREA:
+		UnifiedJob.Type.CLEAR_TERRAIN, UnifiedJob.Type.FLATTEN_AREA:
 			# Area paint mode - show rectangle if dragging
 			if _paint_drag_start != Vector3.INF:
 				var min_x: float = minf(_paint_drag_start.x, _cursor_world_pos.x)
@@ -495,7 +492,7 @@ func _update_paint_preview(job_type: JobTypes.JobType) -> void:
 				# Just show cursor position indicator
 				_paint_preview.show_single(_cursor_world_pos, job_type, is_valid)
 
-		JobTypes.JobType.BUILD_ROAD:
+		UnifiedJob.Type.BUILD_ROAD:
 			# Polyline mode
 			var points: PackedVector3Array = _context.get("road_points", PackedVector3Array())
 			if points.size() > 0:
@@ -506,7 +503,7 @@ func _update_paint_preview(job_type: JobTypes.JobType) -> void:
 			else:
 				_paint_preview.show_single(_cursor_world_pos, job_type, is_valid)
 
-		JobTypes.JobType.BUILD_STRUCTURE:
+		UnifiedJob.Type.BUILD_STRUCTURE:
 			# Single placement with footprint
 			var footprint: Vector2 = _context.get("footprint", Vector2(4, 4))
 			var bounds := Rect2(
@@ -517,7 +514,7 @@ func _update_paint_preview(job_type: JobTypes.JobType) -> void:
 			)
 			_paint_preview.show_area(bounds, job_type, is_valid)
 
-		JobTypes.JobType.FILL_CRATER:
+		UnifiedJob.Type.FILL_CRATER:
 			_paint_preview.show_single(_cursor_world_pos, job_type, is_valid)
 
 
@@ -537,9 +534,13 @@ func set_road_points(points: PackedVector3Array) -> void:
 
 
 ## Get paint drag bounds (for committing)
+## Forces cursor position update for accurate drag end position
 func get_paint_bounds() -> Rect2:
 	if _paint_drag_start == Vector3.INF:
 		return Rect2()
+
+	# Force update cursor position for accurate drag end
+	_update_cursor_position()
 
 	var min_x: float = minf(_paint_drag_start.x, _cursor_world_pos.x)
 	var min_z: float = minf(_paint_drag_start.z, _cursor_world_pos.z)

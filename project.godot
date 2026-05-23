@@ -24,17 +24,19 @@ config/icon="res://icon.svg"
 
 GameEnums="*res://battle_system/data/game_enums.gd"
 BattleSignals="*res://battle_system/signals/battle_signals.gd"
+JobSystem="*res://firebase_system/job_system/job_system.gd"
 SelectionManager="*res://battle_system/systems/selection_manager.gd"
 MoveOrderHandler="*res://battle_system/systems/move_order_handler.gd"
 CombatManager="*res://battle_system/systems/combat_manager.gd"
 TerrainEngine="*res://terrain/core/terrain_engine.gd"
 DamageSystem="*res://terrain/systems/damage_system.gd"
 ClearingSystem="*res://terrain/systems/clearing_system.gd"
+UnifiedTerrain="*res://terrain/core/unified_terrain_engine.gd"
 TerrainIntegration="*res://terrain/terrain_integration.gd"
+TreeNodeManager="*res://terrain/vegetation/tree_node_manager.gd"
+VegetationLODManager="*res://terrain/vegetation/vegetation_lod_manager.gd"
 TerrainClearingSystem="*res://firebase_system/terrain_clearing.gd"
 ConstructionManager="*res://firebase_system/construction_manager.gd"
-JobManager="*res://firebase_system/jobs/job_manager.gd"
-BuilderAI="*res://firebase_system/builder_ai.gd"
 TerrainFlattening="*res://firebase_system/terrain_flattening.gd"
 SpatialHashGrid="*res://battle_system/ai/spatial_hash_grid.gd"
 CoverSystem="*res://battle_system/systems/cover_system.gd"
@@ -43,6 +45,10 @@ VeterancyTracker="*res://battle_system/systems/veterancy_tracker.gd"
 FloatingLabelManager="*res://battle_system/ui/floating_label_manager.gd"
 BattleHUD="*res://battle_system/ui/battle_hud.gd"
 SquadBehaviors="*res://battle_system/ai/squad_behaviors.gd"
+TestDaemon="*res://test_daemon/daemon_autoload.gd"
+SupplyManager="*res://reinforcement_system/supply_manager.gd"
+RoadNetwork="*res://terrain/systems/road_network.gd"
+SupplyChainManager="*res://logistics_system/supply_chain_manager.gd"
 
 [display]
 
@@ -112,7 +118,9 @@ attack={
 3d_physics/layer_5="vehicles"
 3d_physics/layer_6="helicopters"
 3d_physics/layer_7="buildings"
-3d_physics/layer_8="projectiles"
+3d_physics/layer_8="vegetation"
+3d_physics/layer_9="clearing_zones"
+3d_physics/layer_10="projectiles"
 
 [rendering]
 

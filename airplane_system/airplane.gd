@@ -44,6 +44,9 @@ enum Ordnance { BOMBS, NAPALM, ROCKETS, CANNON }
 @export var rocket_pods: int = 19  # FFAR rockets total
 @export var cannon_rounds: int = 200
 
+## Weapon IDs for ordnance types
+@export var cannon_weapon_id: String = "cannon_20mm"  # Override for M61 Vulcan etc.
+
 ## Fuel/rearm
 @export var max_fuel: float = 100.0
 @export var fuel_burn_rate: float = 1.0   # Per second airborne
@@ -75,6 +78,12 @@ var current_speed: float = 0.0
 var _service_timer: float = 0.0
 var _attack_run_phase: int = 0  # 0=approach, 1=dive, 2=release, 3=climb out
 
+## Visual ordnance tracking (from 3D model)
+var _bomb_nodes: Array[Node3D] = []
+var _napalm_nodes: Array[Node3D] = []
+var _rocket_nodes: Array[Node3D] = []
+var _ordnance_drop_index: Dictionary = {"bombs": 0, "napalm": 0, "rockets": 0}
+
 
 func _ready() -> void:
 	add_to_group("airplanes")
@@ -90,7 +99,49 @@ func _ready() -> void:
 	napalm_remaining = napalm_count
 	rockets_remaining = rocket_pods
 	cannon_remaining = cannon_rounds
+	_scan_for_ordnance_nodes()
 	_build_placeholder_visual()
+
+
+## Scan child nodes to find visual ordnance from the 3D model.
+## Ordnance nodes should be named: Ord_L1_Mk82, Ord_R4_Napalm, etc.
+func _scan_for_ordnance_nodes() -> void:
+	_bomb_nodes.clear()
+	_napalm_nodes.clear()
+	_rocket_nodes.clear()
+
+	for child in get_children():
+		_scan_node_recursive(child)
+
+	# Update counts based on visual ordnance if present
+	if _bomb_nodes.size() > 0:
+		bombs_remaining = _bomb_nodes.size()
+		bomb_count = bombs_remaining
+	if _napalm_nodes.size() > 0:
+		napalm_remaining = _napalm_nodes.size()
+		napalm_count = napalm_remaining
+	if _rocket_nodes.size() > 0:
+		rockets_remaining = _rocket_nodes.size()
+		rocket_pods = rockets_remaining
+
+	if _bomb_nodes.size() + _napalm_nodes.size() + _rocket_nodes.size() > 0:
+		print("Airplane: Found visual ordnance - %d bombs, %d napalm, %d rockets" % [
+			_bomb_nodes.size(), _napalm_nodes.size(), _rocket_nodes.size()])
+
+
+func _scan_node_recursive(node: Node) -> void:
+	if node is Node3D:
+		var n := node.name.to_lower()
+		if n.contains("ord_") or n.contains("bomb") or n.contains("mk8") or n.contains("napalm") or n.contains("rocket"):
+			if n.contains("napalm") or n.contains("blu"):
+				_napalm_nodes.append(node as Node3D)
+			elif n.contains("rocket") or n.contains("lau"):
+				_rocket_nodes.append(node as Node3D)
+			else:
+				_bomb_nodes.append(node as Node3D)
+
+	for child in node.get_children():
+		_scan_node_recursive(child)
 
 
 func _build_placeholder_visual() -> void:
@@ -171,6 +222,7 @@ func _process_refuel(delta: float) -> void:
 	cannon_remaining = int(lerp(0.0, float(cannon_rounds), rearm_progress))
 	if _service_timer >= max(refuel_time, rearm_time):
 		_service_timer = 0.0
+		_restore_ordnance_visuals()
 		refuel_complete.emit()
 
 
@@ -245,41 +297,118 @@ func _process_attack_run(delta: float) -> void:
 
 
 func _release_ordnance() -> void:
-	if not CombatManager or not CombatManager.projectile_pool:
-		return
-
 	match selected_ordnance:
 		Ordnance.BOMBS:
 			if bombs_remaining > 0:
-				CombatManager.projectile_pool.fire_weapon("mk82_bomb", self, attack_target_pos, 0)
+				var drop_pos := _hide_next_ordnance_visual("bombs")
+				_spawn_bomb_projectile(drop_pos if drop_pos != Vector3.ZERO else global_position)
 				bombs_remaining -= 1
 		Ordnance.NAPALM:
 			if napalm_remaining > 0:
+				var drop_pos := _hide_next_ordnance_visual("napalm")
 				# Napalm runs lay a strip - drop several over a line
-				var strip_dir: Vector3 = (Vector3(sin(rotation.y), 0, cos(rotation.y)))
+				var strip_dir: Vector3 = Vector3(sin(rotation.y), 0, cos(rotation.y))
+				var base_pos := drop_pos if drop_pos != Vector3.ZERO else global_position
 				for i in 5:
-					var drop_pos: Vector3 = attack_target_pos + strip_dir * float(i - 2) * 15.0
-					CombatManager.projectile_pool.fire_weapon("napalm", self, drop_pos, 0)
+					var offset_pos: Vector3 = base_pos + strip_dir * float(i - 2) * 15.0
+					_spawn_napalm_projectile(offset_pos)
 				napalm_remaining -= 1
 		Ordnance.ROCKETS:
 			# Fire a salvo of 6 rockets
-			var salvo: int = min(6, rockets_remaining)
+			var salvo: int = mini(6, rockets_remaining)
 			for i in salvo:
+				var drop_pos := _hide_next_ordnance_visual("rockets")
 				var spread := Vector3(randf_range(-8.0, 8.0), 0, randf_range(-8.0, 8.0))
-				CombatManager.projectile_pool.fire_weapon("ffar_rocket", self, attack_target_pos + spread, 0)
+				_spawn_rocket_projectile((drop_pos if drop_pos != Vector3.ZERO else global_position) + spread)
 			rockets_remaining -= salvo
 		Ordnance.CANNON:
-			# Strafe pass
-			var strafe_count: int = min(20, cannon_remaining)
+			# Strafe pass - no visual ordnance for cannon
+			var strafe_count: int = mini(20, cannon_remaining)
 			for i in strafe_count:
 				var fwd_offset: float = float(i) * 3.0
 				var fwd: Vector3 = Vector3(sin(rotation.y), 0, cos(rotation.y))
-				CombatManager.projectile_pool.fire_weapon("cannon_20mm", self, attack_target_pos + fwd * fwd_offset, 0)
+				_spawn_cannon_projectile(attack_target_pos + fwd * fwd_offset)
 			cannon_remaining -= strafe_count
 
 	if bombs_remaining + napalm_remaining + rockets_remaining + cannon_remaining <= 0:
 		ordnance_depleted.emit()
 		start_return_to_base()
+
+
+## Hide the next visual ordnance node and return its world position.
+func _hide_next_ordnance_visual(ordnance_type: String) -> Vector3:
+	var nodes: Array[Node3D]
+	var index_key: String = ordnance_type
+
+	match ordnance_type:
+		"bombs":
+			nodes = _bomb_nodes
+		"napalm":
+			nodes = _napalm_nodes
+		"rockets":
+			nodes = _rocket_nodes
+		_:
+			return Vector3.ZERO
+
+	var idx: int = _ordnance_drop_index.get(index_key, 0)
+	if idx >= nodes.size():
+		return Vector3.ZERO
+
+	# Find next visible ordnance
+	while idx < nodes.size():
+		var node := nodes[idx]
+		if node and node.visible:
+			var world_pos := node.global_position
+			node.visible = false
+			_ordnance_drop_index[index_key] = idx + 1
+			return world_pos
+		idx += 1
+
+	return Vector3.ZERO
+
+
+## Restore all ordnance visuals after rearming.
+func _restore_ordnance_visuals() -> void:
+	for node in _bomb_nodes:
+		if node:
+			node.visible = true
+	for node in _napalm_nodes:
+		if node:
+			node.visible = true
+	for node in _rocket_nodes:
+		if node:
+			node.visible = true
+	_ordnance_drop_index = {"bombs": 0, "napalm": 0, "rockets": 0}
+
+
+## Spawn bomb projectile with physics-like falling
+func _spawn_bomb_projectile(start_pos: Vector3) -> void:
+	# Calculate plane's forward velocity for bomb inheritance
+	var plane_velocity: Vector3 = Vector3(sin(rotation.y), 0, cos(rotation.y)) * current_speed
+
+	if CombatManager and CombatManager.projectile_pool:
+		CombatManager.projectile_pool.fire_weapon_with_velocity("mk82_bomb", self, attack_target_pos, 0, plane_velocity)
+	else:
+		# Fallback: emit signal for manual handling
+		BattleSignals.bomb_dropped.emit(start_pos, attack_target_pos, plane_velocity)
+
+
+func _spawn_napalm_projectile(start_pos: Vector3) -> void:
+	# Napalm also inherits plane velocity
+	var plane_velocity: Vector3 = Vector3(sin(rotation.y), 0, cos(rotation.y)) * current_speed
+
+	if CombatManager and CombatManager.projectile_pool:
+		CombatManager.projectile_pool.fire_weapon_with_velocity("napalm", self, start_pos, 0, plane_velocity)
+
+
+func _spawn_rocket_projectile(target_pos: Vector3) -> void:
+	if CombatManager and CombatManager.projectile_pool:
+		CombatManager.projectile_pool.fire_weapon("ffar_rocket", self, target_pos, 0)
+
+
+func _spawn_cannon_projectile(target_pos: Vector3) -> void:
+	if CombatManager and CombatManager.projectile_pool:
+		CombatManager.projectile_pool.fire_weapon(cannon_weapon_id, self, target_pos, 0)
 
 
 func _process_return(delta: float) -> void:

@@ -19,6 +19,26 @@ enum PlacementMode {
 	PAINTABLE_LINE_JITTERED  # Drag line with jittered spacing (foxholes)
 }
 
+## Tab categories for organizing buildings
+enum TabCategory {
+	FIELD_DEFENSE,      # Placeable anywhere (no TOC required)
+	FIREBASE_DEFENSE,   # Requires being within TOC influence zone (150m)
+	OPERATIONS,         # Firebase operational buildings (TOC can be placed anywhere to start)
+	SUPPLY_CHAIN,       # Logistics and roads
+}
+
+## Tab data container
+class TabData:
+	var id: TabCategory
+	var display_name: String
+	var icon_text: String
+	var buildings: Array = []
+
+	func _init(p_id: TabCategory, p_name: String, p_icon: String) -> void:
+		id = p_id
+		display_name = p_name
+		icon_text = p_icon
+
 ## Building entry for the menu
 class BuildingEntry:
 	var key: String
@@ -46,6 +66,44 @@ const DISABLED_ALPHA := 0.4
 ## Available buildings - defined here for quick iteration
 var BUILDINGS: Array[BuildingEntry] = []
 
+## Tab system
+var TABS: Array[TabData] = []
+var _current_tab: TabCategory = TabCategory.FIELD_DEFENSE
+var _tab_buttons: Dictionary = {}  # TabCategory -> Button
+var _tab_bar: HBoxContainer
+
+## Mapping of BuildingTypes to tabs
+const TAB_BUILDINGS: Dictionary = {
+	TabCategory.FIELD_DEFENSE: [
+		BuildingData.BuildingType.SANDBAG_LIGHT,
+		BuildingData.BuildingType.WIRE_OBSTACLE,
+		BuildingData.BuildingType.TANK_TRAP,
+		BuildingData.BuildingType.FOXHOLE,
+		BuildingData.BuildingType.CLAYMORE_LINE,
+	],
+	TabCategory.FIREBASE_DEFENSE: [
+		BuildingData.BuildingType.BUNKER,
+		BuildingData.BuildingType.MACHINE_GUN_NEST,
+		BuildingData.BuildingType.MORTAR_PIT,
+		BuildingData.BuildingType.SANDBAG_HEAVY,
+		BuildingData.BuildingType.WATCHTOWER,
+		BuildingData.BuildingType.TRENCH,
+	],
+	TabCategory.OPERATIONS: [
+		BuildingData.BuildingType.HELIPAD,
+		BuildingData.BuildingType.TOC,
+		BuildingData.BuildingType.MEDICAL_STATION,
+		BuildingData.BuildingType.AMMO_BUNKER,
+		BuildingData.BuildingType.COMMO_BUNKER,
+		BuildingData.BuildingType.OBSERVATION_TOWER,
+	],
+	TabCategory.SUPPLY_CHAIN: [
+		BuildingData.BuildingType.SUPPLY_DEPOT,
+		BuildingData.BuildingType.FUEL_DEPOT,
+		BuildingData.BuildingType.PONTOON_BRIDGE,
+	],
+}
+
 ## UI elements
 var _header: HBoxContainer
 var _title_label: Label
@@ -59,12 +117,28 @@ var current_supply: int = 1000
 
 
 func _ready() -> void:
+	_setup_tabs()
 	_setup_buildings()
 	_create_ui()
 	visible = false
 
 	# Allow clicking outside to close
 	gui_input.connect(_on_panel_gui_input)
+
+
+func _setup_tabs() -> void:
+	## Initialize tab data with display names and icons
+	TABS.clear()
+
+	var field_tab := TabData.new(TabCategory.FIELD_DEFENSE, "Field", "[F]")
+	var firebase_tab := TabData.new(TabCategory.FIREBASE_DEFENSE, "Defense", "[D]")
+	var ops_tab := TabData.new(TabCategory.OPERATIONS, "Ops", "[O]")
+	var supply_tab := TabData.new(TabCategory.SUPPLY_CHAIN, "Supply", "[S]")
+
+	TABS.append(field_tab)
+	TABS.append(firebase_tab)
+	TABS.append(ops_tab)
+	TABS.append(supply_tab)
 
 
 func _setup_buildings() -> void:
@@ -81,7 +155,11 @@ func _setup_buildings() -> void:
 
 	# Tank Traps - jittered line placement
 	_add_building("tank_trap", "Tank Trap", 8, PlacementMode.PAINTABLE_LINE_JITTERED,
-		"", -1, 2.5)  # 2.5m spacing with jitter
+		"", BuildingData.BuildingType.TANK_TRAP, 2.5)  # 2.5m spacing with jitter
+
+	# Claymore Line - single placement (directional mine)
+	_add_building("claymore_line", "Claymore", 20, PlacementMode.SINGLE,
+		"", BuildingData.BuildingType.CLAYMORE_LINE)
 
 	# Bunker - single placement
 	_add_building("bunker", "Bunker", 40, PlacementMode.SINGLE,
@@ -99,9 +177,13 @@ func _setup_buildings() -> void:
 	_add_building("watchtower", "Watchtower", 25, PlacementMode.SINGLE,
 		"", BuildingData.BuildingType.WATCHTOWER)
 
+	# Heavy Sandbag - requires cleared terrain
+	_add_building("sandbag_heavy", "Heavy Sandbag", 15, PlacementMode.PAINTABLE,
+		"", BuildingData.BuildingType.SANDBAG_HEAVY)
+
 	# Foxhole - jittered line placement (CoH-style defensive line)
 	_add_building("foxhole", "Foxhole", 15, PlacementMode.PAINTABLE_LINE_JITTERED,
-		"", -1, 4.0)  # 4m base spacing
+		"", BuildingData.BuildingType.FOXHOLE, 4.0)  # 4m base spacing
 
 	# Helipad - single placement
 	_add_building("helipad", "Helipad", 50, PlacementMode.SINGLE,
@@ -115,9 +197,17 @@ func _setup_buildings() -> void:
 	_add_building("medical_station", "Medical Station", 35, PlacementMode.SINGLE,
 		"", BuildingData.BuildingType.MEDICAL_STATION)
 
-	# TOC (Command) - single placement
+	# TOC (Command) - single placement - can be placed anywhere to start a firebase
 	_add_building("toc", "TOC", 80, PlacementMode.SINGLE,
 		"", BuildingData.BuildingType.TOC)
+
+	# Commo Bunker - radio/air support
+	_add_building("commo_bunker", "Commo Bunker", 50, PlacementMode.SINGLE,
+		"", BuildingData.BuildingType.COMMO_BUNKER)
+
+	# Observation Tower - enhanced vision
+	_add_building("observation_tower", "Obs Tower", 30, PlacementMode.SINGLE,
+		"", BuildingData.BuildingType.OBSERVATION_TOWER)
 
 	# Gate Entrance - single placement
 	_add_building("gate_entrance", "Gate Entrance", 25, PlacementMode.SINGLE,
@@ -125,11 +215,21 @@ func _setup_buildings() -> void:
 
 	# Trench - paintable, seamless
 	_add_building("trench", "Trench", 12, PlacementMode.PAINTABLE,
-		"", -1)
+		"", BuildingData.BuildingType.TRENCH)
 
 	# Artillery Pit - single placement
 	_add_building("artillery_pit", "Artillery Pit", 100, PlacementMode.SINGLE,
 		"", BuildingData.BuildingType.ARTILLERY_PIT)
+
+	# Supply Chain buildings
+	_add_building("supply_depot", "Supply Depot", 60, PlacementMode.SINGLE,
+		"", BuildingData.BuildingType.SUPPLY_DEPOT)
+
+	_add_building("fuel_depot", "Fuel Depot", 40, PlacementMode.SINGLE,
+		"", BuildingData.BuildingType.FUEL_DEPOT)
+
+	_add_building("pontoon_bridge", "Pontoon Bridge", 80, PlacementMode.SINGLE,
+		"", BuildingData.BuildingType.PONTOON_BRIDGE)
 
 
 func _add_building(key: String, name: String, cost: int, mode: PlacementMode,
@@ -167,6 +267,9 @@ func _create_ui() -> void:
 	# Separator
 	var sep := HSeparator.new()
 	main_vbox.add_child(sep)
+
+	# Tab bar
+	_create_tab_bar(main_vbox)
 
 	# Scroll container for grid
 	_scroll_container = ScrollContainer.new()
@@ -213,14 +316,106 @@ func _create_header(parent: VBoxContainer) -> void:
 	_header.add_child(_close_button)
 
 
+func _create_tab_bar(parent: VBoxContainer) -> void:
+	_tab_bar = HBoxContainer.new()
+	_tab_bar.add_theme_constant_override("separation", 4)
+
+	var tab_container := PanelContainer.new()
+	var tab_style := StyleBoxFlat.new()
+	tab_style.bg_color = Color(0.12, 0.14, 0.11, 0.9)
+	tab_style.content_margin_left = 4
+	tab_style.content_margin_right = 4
+	tab_style.content_margin_top = 4
+	tab_style.content_margin_bottom = 4
+	tab_container.add_theme_stylebox_override("panel", tab_style)
+	parent.add_child(tab_container)
+	tab_container.add_child(_tab_bar)
+
+	# Create tab buttons
+	for tab_data: TabData in TABS:
+		var btn := Button.new()
+		btn.text = tab_data.display_name
+		btn.custom_minimum_size = Vector2(90, 28)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.pressed.connect(_on_tab_pressed.bind(tab_data.id))
+
+		# Store button reference
+		_tab_buttons[tab_data.id] = btn
+		_tab_bar.add_child(btn)
+
+	# Apply initial tab styling
+	_update_tab_styles()
+
+
+func _update_tab_styles() -> void:
+	## Update tab button styles based on current selection
+	for tab_id: TabCategory in _tab_buttons:
+		var btn: Button = _tab_buttons[tab_id]
+		var is_active: bool = tab_id == _current_tab
+
+		# Create style for this button
+		var btn_style := StyleBoxFlat.new()
+		if is_active:
+			# Active tab - brighter
+			btn_style.bg_color = Color(0.3, 0.38, 0.26)
+			btn_style.border_color = Color(0.45, 0.55, 0.35)
+		else:
+			# Inactive tab - dimmed
+			btn_style.bg_color = Color(0.15, 0.18, 0.13)
+			btn_style.border_color = Color(0.25, 0.3, 0.22)
+
+		btn_style.set_border_width_all(1)
+		btn_style.set_corner_radius_all(3)
+		btn.add_theme_stylebox_override("normal", btn_style)
+
+		# Hover style
+		var hover_style := btn_style.duplicate()
+		hover_style.bg_color = Color(0.35, 0.43, 0.3) if is_active else Color(0.22, 0.27, 0.19)
+		hover_style.border_color = Color(0.5, 0.6, 0.4)
+		btn.add_theme_stylebox_override("hover", hover_style)
+
+		# Pressed style
+		var pressed_style := btn_style.duplicate()
+		pressed_style.bg_color = Color(0.25, 0.32, 0.22)
+		btn.add_theme_stylebox_override("pressed", pressed_style)
+
+		# Text color
+		var text_color := Color(0.95, 0.95, 0.9) if is_active else Color(0.6, 0.6, 0.55)
+		btn.add_theme_color_override("font_color", text_color)
+
+
+func _on_tab_pressed(tab_id: TabCategory) -> void:
+	if _current_tab == tab_id:
+		return
+
+	_current_tab = tab_id
+	_update_tab_styles()
+	_populate_grid()
+
+
+func _get_buildings_for_current_tab() -> Array[BuildingEntry]:
+	## Returns only buildings that belong to the current tab
+	var result: Array[BuildingEntry] = []
+	var tab_building_types: Array = TAB_BUILDINGS.get(_current_tab, [])
+
+	for entry: BuildingEntry in BUILDINGS:
+		if entry.building_type in tab_building_types:
+			result.append(entry)
+
+	return result
+
+
 func _populate_grid() -> void:
 	# Clear existing
 	for child in _grid_container.get_children():
 		child.queue_free()
 	_thumbnail_buttons.clear()
 
+	# Get buildings for current tab
+	var tab_buildings: Array[BuildingEntry] = _get_buildings_for_current_tab()
+
 	# Add building thumbnails
-	for entry in BUILDINGS:
+	for entry: BuildingEntry in tab_buildings:
 		var thumb := _create_thumbnail(entry)
 		_grid_container.add_child(thumb)
 		_thumbnail_buttons[entry.key] = thumb
@@ -290,18 +485,25 @@ func _get_building_icon(key: String) -> String:
 		"sandbag_wall": return "[=]"
 		"wire_obstacle": return "///"
 		"tank_trap": return "XXX"
+		"claymore_line": return ">*<"
 		"bunker": return "[B]"
 		"mg_nest": return "[M]"
 		"mortar_pit": return "[O]"
 		"watchtower": return "[T]"
+		"sandbag_heavy": return "[==]"
 		"foxhole": return "(F)"
 		"helipad": return "[H]"
 		"ammo_bunker": return "[A]"
 		"medical_station": return "[+]"
 		"toc": return "[C]"
+		"commo_bunker": return "[R]"
+		"observation_tower": return "[^]"
 		"gate_entrance": return "[G]"
 		"trench": return "---"
 		"artillery_pit": return "[!]"
+		"supply_depot": return "[S]"
+		"fuel_depot": return "[F]"
+		"pontoon_bridge": return "=|="
 		_: return "[?]"
 
 

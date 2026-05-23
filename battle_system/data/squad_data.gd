@@ -48,6 +48,14 @@ class_name SquadData extends Resource
 @export var sight_range: float = 30.0
 @export var stealth_rating: float = 0.0  # 0.0 = visible, 1.0 = hard to detect
 
+@export_group("Resources")
+## Maximum water capacity (units deplete 1 per 30 sec)
+@export var max_water: int = 100
+## Maximum ammo reserve (separate from magazine)
+@export var max_ammo_reserve: int = 200
+## Water consumption rate (units per second)
+@export var water_consumption_rate: float = 0.033  # ~1 per 30 sec
+
 @export_group("Special")
 @export var can_build: bool = false
 @export var can_capture: bool = false

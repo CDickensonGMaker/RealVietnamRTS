@@ -227,6 +227,16 @@ func randomize_seed() -> void:
 	seed_value = randi()
 
 
+## Diagnostic helper to print heightmap range after each processing step
+func _diag_print_range(step_name: String) -> void:
+	var min_h: float = INF
+	var max_h: float = -INF
+	for h in heightmap_data:
+		min_h = minf(min_h, h)
+		max_h = maxf(max_h, h)
+	print("[DIAG] %s: range %.4f to %.4f" % [step_name, min_h, max_h])
+
+
 func generate(new_seed: int = -1) -> void:
 	if new_seed >= 0:
 		seed_value = new_seed
@@ -242,31 +252,49 @@ func generate(new_seed: int = -1) -> void:
 
 	heightmap_data.resize(terrain_size * terrain_size)
 
+	print("[DIAG] TerrainEngine.generate() starting with height_scale=%.1f" % height_scale)
+
 	# Step 1: Generate base terrain with domain warping
 	_generate_base_with_warping()
+	_diag_print_range("Step 1 (base+warp)")
 
 	# Step 2: Apply ridged multifractal for mountain ridges
 	if params.get("ridge_enabled", true):
 		_apply_ridged_multifractal()
+		_diag_print_range("Step 2 (ridges)")
 
 	# Step 3: Add detail noise
 	_apply_detail_noise()
+	_diag_print_range("Step 3 (detail)")
 
 	# Step 4: Apply cliff sharpening
 	if params.get("cliff_enabled", true):
 		_apply_cliff_enhancement()
+		_diag_print_range("Step 4 (cliffs)")
 
 	# Step 5: Smooth for clean rolling hills
 	var smooth_passes: int = params.get("smoothing_passes", 2)
 	for i in range(smooth_passes):
 		_smooth_heightmap()
+	_diag_print_range("Step 5 (smooth)")
 
 	# Step 6: Hydraulic erosion simulation
 	if params.get("erosion_enabled", true):
 		_simulate_hydraulic_erosion()
+		_diag_print_range("Step 6 (erosion)")
 
 	# Final normalization
 	_normalize_heightmap()
+
+	# DIAGNOSTIC: Verify normalization worked
+	var post_norm_min: float = INF
+	var post_norm_max: float = -INF
+	for h in heightmap_data:
+		post_norm_min = minf(post_norm_min, h)
+		post_norm_max = maxf(post_norm_max, h)
+	print("[DIAG] TerrainEngine post-normalize range: %.4f to %.4f (should be 0-1)" % [post_norm_min, post_norm_max])
+	if post_norm_max > 1.01 or post_norm_min < -0.01:
+		push_warning("[DIAG] TerrainEngine: Normalization failed! Data outside 0-1 range!")
 
 	# Create image
 	_create_heightmap_image()
