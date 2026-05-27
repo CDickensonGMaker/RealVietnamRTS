@@ -77,6 +77,7 @@ const COL_STATE_COMBAT := Color(0.9, 0.3, 0.2)
 const COL_STATE_SUPPRESSED := Color(0.9, 0.6, 0.1)
 const COL_STATE_CLEARING := Color(0.6, 0.4, 0.2)
 const COL_STATE_DEPLOYED := Color(0.4, 0.7, 0.4)
+const COL_STATE_WORKING := Color(0.2, 0.7, 0.3)  # Green for workers on jobs
 
 # =============================================================================
 # STATIC HELPER METHODS

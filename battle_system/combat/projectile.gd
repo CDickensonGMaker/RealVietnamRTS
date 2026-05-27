@@ -10,6 +10,7 @@ signal expired
 const VietnamWeaponDataScript = preload("res://battle_system/data/vietnam_weapon_data.gd")
 const DamageSystemScript = preload("res://terrain/systems/damage_system.gd")
 const ImpactEffectsScript = preload("res://battle_system/effects/impact_effects.gd")
+const FireHazard = preload("res://battle_system/combat/fire_hazard.gd")
 
 enum ProjectileType {
 	BULLET,         # Fast, direct, tracer trail
@@ -82,6 +83,9 @@ var _is_active: bool = false
 
 ## Impact effects system reference (set by ProjectilePool)
 var impact_effects: Node = null
+
+## Track direct hit target to prevent double suppression
+var _direct_hit_target: Node = null
 
 ## Components
 var _mesh: MeshInstance3D = null
@@ -181,10 +185,8 @@ func _physics_process(delta: float) -> void:
 		VietnamWeaponDataScript.Trajectory.NAPALM:
 			_process_napalm_trajectory(delta)
 
-	# Check ground collision
-	if global_position.y <= 0.0:
-		global_position.y = 0.0
-		_on_ground_impact()
+	# Check terrain collision via raycast (handles hills/valleys, not just Y=0)
+	_check_terrain_collision()
 
 
 func _process_flat_trajectory(delta: float) -> void:
@@ -343,6 +345,49 @@ func _process_napalm_trajectory(delta: float) -> void:
 	rotation.z += delta * tumble * 0.8
 
 
+## Check for terrain collision using raycast instead of hardcoded Y=0.
+## This properly handles hills, valleys, and uneven terrain.
+func _check_terrain_collision() -> void:
+	var space := get_world_3d().direct_space_state
+	if not space:
+		# Fallback to simple Y check
+		if global_position.y <= 0.0:
+			global_position.y = 0.0
+			_on_ground_impact()
+		return
+
+	# Raycast from current position downward
+	var ray_length: float = 2.0  # Check 2m below projectile
+	var from := global_position
+	var to := global_position + Vector3(0, -ray_length, 0)
+
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collision_mask = 1  # Terrain layer
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+
+	var result: Dictionary = space.intersect_ray(query)
+	if result:
+		# Hit terrain - check if we're below the surface
+		var terrain_y: float = result.position.y
+		if global_position.y <= terrain_y + 0.1:  # Small buffer
+			global_position = result.position
+			_on_ground_impact()
+			return
+
+	# Also check forward ray for high-speed projectiles hitting terrain ahead
+	if velocity.length() > 100.0:  # High speed projectiles
+		var forward_dist: float = velocity.length() * 0.05  # 50ms lookahead
+		to = global_position + velocity.normalized() * forward_dist
+		query = PhysicsRayQueryParameters3D.create(from, to)
+		query.collision_mask = 1
+
+		result = space.intersect_ray(query)
+		if result:
+			global_position = result.position
+			_on_ground_impact()
+
+
 func _on_body_entered(body: Node3D) -> void:
 	if not _is_active:
 		return
@@ -362,6 +407,9 @@ func _on_body_entered(body: Node3D) -> void:
 
 
 func _on_hit(target: Node) -> void:
+	# Track direct hit target to prevent double suppression in AOE
+	_direct_hit_target = target
+
 	# Calculate damage
 	var final_damage: float = damage
 
@@ -378,7 +426,7 @@ func _on_hit(target: Node) -> void:
 	if target.has_method("take_damage"):
 		target.take_damage(final_damage, source)
 
-	# Apply suppression
+	# Apply suppression (direct hit - full suppression)
 	if suppression > 0.0 and target.has_method("apply_suppression"):
 		target.apply_suppression(suppression)
 
@@ -389,9 +437,12 @@ func _on_hit(target: Node) -> void:
 	if impact_effects and impact_effects.has_method("spawn_for_projectile"):
 		impact_effects.spawn_for_projectile(global_position, target, weapon_category, aoe_radius)
 
-	# AOE damage
+	# AOE damage (will skip suppression for direct_hit_target)
 	if aoe_radius > 0.0:
 		_apply_aoe_damage(global_position)
+
+	# Clear direct hit target after AOE processing
+	_direct_hit_target = null
 
 	# Check pierce
 	if pierce_count < max_pierces:
@@ -453,21 +504,41 @@ func _apply_aoe_damage(center: Vector3) -> void:
 			damage_mult = 1.0 - (distance / aoe_radius)
 			damage_mult = maxf(damage_mult, 0.25)  # Minimum 25%
 
-		# Apply damage
-		if body.has_method("take_damage"):
-			body.take_damage(damage * damage_mult, source)
+		# Skip damage for direct hit target (already took full damage)
+		var is_direct_hit: bool = _direct_hit_target != null and body == _direct_hit_target
+		if not is_direct_hit:
+			# Apply AOE damage to units not directly hit
+			if body.has_method("take_damage"):
+				body.take_damage(damage * damage_mult, source)
 
-		# Apply suppression
-		if suppression_radius > 0.0 and distance <= suppression_radius:
+		# Apply suppression - but skip for direct hit target (already suppressed)
+		if not is_direct_hit and suppression_radius > 0.0 and distance <= suppression_radius:
 			if body.has_method("apply_suppression"):
 				body.apply_suppression(suppression * damage_mult)
 
 
 func _spawn_fire_hazard() -> void:
-	# TODO: Spawn persistent fire hazard zone
-	# For now, just emit signal
+	# Spawn persistent fire hazard zone for napalm
+	var fire_radius: float = maxf(aoe_radius, 10.0)  # Napalm spreads at least 10m
+	var fire_duration: float = 15.0  # 15 seconds of burning
+	var fire_dps: float = 25.0  # 25 damage per second
+
+	# Create fire hazard at impact point
+	var fire = FireHazard.create_at(
+		get_tree().root,  # Add to root so it persists after projectile is freed
+		global_position,
+		fire_radius,
+		fire_duration,
+		fire_dps
+	)
+
+	# Wire up signals for tracking
+	if fire and BattleSignals:
+		fire.unit_burned.connect(func(unit, dmg): BattleSignals.unit_damaged.emit(unit, dmg, self))
+
+	# Emit signal for audio/visual effects
 	if BattleSignals:
-		BattleSignals.napalm_impact.emit(global_position, aoe_radius)
+		BattleSignals.napalm_impact.emit(global_position, fire_radius)
 
 
 ## Apply terrain damage based on weapon category.
@@ -538,6 +609,7 @@ func fire(config: Dictionary) -> void:
 	pierce_count = 0
 	visible = true
 	_motor_burning = false
+	_direct_hit_target = null
 
 	# Position
 	global_position = config.get("start_position", Vector3.ZERO)
@@ -691,8 +763,13 @@ func _update_visuals() -> void:
 func _setup_bullet_visual() -> void:
 	# Small, fast bullet
 	var mesh := SphereMesh.new()
-	mesh.radius = 0.03
-	mesh.height = 0.1
+	# Fix 2: Make tracers 3x larger so they're visible at 50m+ distances
+	if is_tracer:
+		mesh.radius = 0.10  # Was 0.03 (3x larger for visibility)
+		mesh.height = 0.30  # Was 0.1 (3x longer)
+	else:
+		mesh.radius = 0.03
+		mesh.height = 0.1
 	_mesh.mesh = mesh
 
 	var mat := StandardMaterial3D.new()
@@ -700,14 +777,18 @@ func _setup_bullet_visual() -> void:
 		mat.albedo_color = Color(1.0, 0.8, 0.3)
 		mat.emission_enabled = true
 		mat.emission = Color(1.0, 0.6, 0.2)
-		mat.emission_energy_multiplier = 2.0
+		mat.emission_energy_multiplier = 5.0  # Was 2.0 (brighter for visibility)
 		trail_enabled = true
 	else:
 		mat.albedo_color = Color(0.6, 0.5, 0.3)
 		trail_enabled = false
 	_mesh.material_override = mat
 
-	_mesh.scale = Vector3(1, 1, 2)  # Elongate
+	# Fix 2: More elongated tracers for streak effect
+	if is_tracer:
+		_mesh.scale = Vector3(1.5, 1.5, 5)  # More elongated tracer streak
+	else:
+		_mesh.scale = Vector3(1, 1, 2)  # Elongate normal bullets
 
 
 func _setup_rocket_visual() -> void:

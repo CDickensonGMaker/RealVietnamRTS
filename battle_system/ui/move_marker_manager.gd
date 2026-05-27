@@ -23,15 +23,32 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
-	# Clean up freed markers
-	var to_remove: Array[Node3D] = []
-	for marker in _active_markers:
-		if not is_instance_valid(marker):
-			to_remove.append(marker)
+	# Clean up freed markers - filter in place using indices
+	var i := _active_markers.size() - 1
+	while i >= 0:
+		if not is_instance_valid(_active_markers[i]):
+			# Remove from spatial tracking first (uses the reference before removal)
+			_remove_invalid_from_spatial_tracking()
+			_active_markers.remove_at(i)
+		i -= 1
 
-	for marker in to_remove:
-		_active_markers.erase(marker)
-		_remove_from_spatial_tracking(marker)
+
+## Remove invalid markers from spatial tracking
+func _remove_invalid_from_spatial_tracking() -> void:
+	var cells_to_remove: Array = []
+	for cell in _marker_positions:
+		var markers: Array = _marker_positions[cell]
+		# Filter to only valid markers
+		var valid_markers: Array = []
+		for m in markers:
+			if is_instance_valid(m):
+				valid_markers.append(m)
+		if valid_markers.is_empty():
+			cells_to_remove.append(cell)
+		else:
+			_marker_positions[cell] = valid_markers
+	for cell in cells_to_remove:
+		_marker_positions.erase(cell)
 
 
 ## Spawn a move marker at the target position

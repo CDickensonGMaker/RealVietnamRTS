@@ -265,16 +265,38 @@ func _predict_target_position(attacker: Node, target: Node, weapon: RefCounted) 
 			# Add prediction
 			target_pos += target_velocity * flight_time * 0.5  # 50% prediction
 
-	# Add random offset for scatter
+	# Apply accuracy-scaled scatter
+	# Low accuracy = much more scatter, high accuracy = tight grouping
 	if weapon.scatter_angle > 0.0:
-		var scatter_dist: float = tan(deg_to_rad(weapon.scatter_angle)) * attacker.global_position.distance_to(target_pos)
+		var scatter_angle: float = _calculate_effective_scatter(attacker, target, weapon)
+		var distance: float = attacker.global_position.distance_to(target_pos)
+		var scatter_dist: float = tan(deg_to_rad(scatter_angle)) * distance
 		target_pos += Vector3(
 			randf_range(-scatter_dist, scatter_dist),
-			0.0,
+			randf_range(-scatter_dist * 0.3, scatter_dist * 0.3),  # Less vertical scatter
 			randf_range(-scatter_dist, scatter_dist)
 		)
 
 	return target_pos
+
+
+## Calculate effective scatter angle based on accuracy factors.
+## Low accuracy = high scatter multiplier, high accuracy = weapon's base scatter.
+## This wires up the dead accuracy code so suppression/cover/range actually affects shots.
+func _calculate_effective_scatter(attacker: Node, target: Node, weapon: RefCounted) -> float:
+	# Get the accuracy (0.0-1.0) from calculate_hit_chance
+	var weapon_id: String = weapon.id if weapon.get("id") else ""
+	var accuracy: float = calculate_hit_chance(attacker, target, weapon_id)
+
+	# Scatter multiplier: accuracy 1.0 = 1x scatter, accuracy 0.1 = 10x scatter
+	# Formula: 1.0 + (1.0 - accuracy) * 9.0
+	# - At 95% accuracy: 1.0 + 0.05 * 9.0 = 1.45x scatter
+	# - At 70% accuracy: 1.0 + 0.30 * 9.0 = 3.7x scatter
+	# - At 30% accuracy: 1.0 + 0.70 * 9.0 = 7.3x scatter
+	# - At 10% accuracy: 1.0 + 0.90 * 9.0 = 9.1x scatter
+	var scatter_multiplier: float = 1.0 + (1.0 - accuracy) * 9.0
+
+	return weapon.scatter_angle * scatter_multiplier
 
 
 ## Calculate hit chance for an attack.

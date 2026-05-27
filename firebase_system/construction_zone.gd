@@ -9,6 +9,8 @@ signal construction_progress(zone: ConstructionZone, progress: float)
 signal stage_complete(zone: ConstructionZone, stage: int)
 signal construction_complete(zone: ConstructionZone, building: Node3D)
 signal construction_cancelled(zone: ConstructionZone)
+signal building_damaged(zone: ConstructionZone, damage: float, remaining_health: float)
+signal building_destroyed(zone: ConstructionZone)
 
 enum ZoneState { EMPTY, CLEARING, BUILDING, COMPLETE }
 enum ConstructionStage { NONE, FOUNDATION, STRUCTURE, FINISHING, COMPLETE }
@@ -23,7 +25,7 @@ const BUILDING_MODELS: Dictionary = {
 	# =========================================================================
 	BuildingData.BuildingType.SANDBAG_LIGHT: "res://assets/models/structures/firebase/sandbag_light.glb",
 	BuildingData.BuildingType.SANDBAG_HEAVY: "res://assets/models/structures/firebase/sandbag_heavy.glb",
-	BuildingData.BuildingType.BUNKER: "res://assets/models/structures/bunker.glb",
+	BuildingData.BuildingType.BUNKER: "res://assets/models/structures/barracks_bunker.glb",  # Aligned with bunker.tscn
 	BuildingData.BuildingType.SANDBAG_BUNKER: "res://assets/models/structures/firebase/sandbag_bunker.glb",
 	BuildingData.BuildingType.CONEX_BUNKER: "res://assets/models/structures/firebase/conex_bunker.glb",
 	BuildingData.BuildingType.MACHINE_GUN_NEST: "res://assets/models/structures/firebase/mg_nest.glb",
@@ -184,7 +186,7 @@ const BUILDING_MODELS: Dictionary = {
 	# =========================================================================
 	# FIREBASE LOGISTICS
 	# =========================================================================
-	BuildingData.BuildingType.SUPPLY_DEPOT: "res://assets/models/structures/us/us_supply_depot.glb",
+	BuildingData.BuildingType.SUPPLY_DEPOT: "res://assets/models/structures/firebase/supply_depot.glb",
 	BuildingData.BuildingType.TRUCK_STAGING_AREA: "res://assets/models/structures/firebase/supply_depot.glb",  # Use supply depot model as placeholder
 
 	# =========================================================================
@@ -216,6 +218,10 @@ var _construction_mesh: MeshInstance3D = null
 
 ## Destruction state
 var current_destruction_state: BuildingData.DestructionState = BuildingData.DestructionState.INTACT
+
+## Health tracking
+var max_health: float = 100.0
+var current_health: float = 100.0
 
 ## Workers
 var assigned_engineers: Array[Node3D] = []
@@ -358,6 +364,14 @@ func _complete_construction() -> void:
 		_construction_mesh.queue_free()
 		_construction_mesh = null
 
+	# Initialize health from building data
+	if building_data:
+		max_health = building_data.health
+		current_health = max_health
+	else:
+		max_health = 100.0
+		current_health = 100.0
+
 	# Create final building
 	completed_building = _create_building()
 	construction_complete.emit(self, completed_building)
@@ -401,6 +415,16 @@ func _create_building() -> Node3D:
 			var model_scene: PackedScene = load(model_path)
 			if model_scene:
 				var model_instance: Node3D = model_scene.instantiate()
+
+				# Apply model scale overrides for specific buildings
+				match building_data.building_type:
+					BuildingData.BuildingType.MORTAR_PIT:
+						model_instance.scale = Vector3(1.3, 1.3, 1.3)  # 30% larger - model is too small
+					BuildingData.BuildingType.BUNKER:
+						model_instance.scale = Vector3(1.25, 1.25, 1.25)  # 25% larger
+					BuildingData.BuildingType.FUEL_DEPOT, BuildingData.BuildingType.FUEL_POINT:
+						model_instance.scale = Vector3(0.5, 0.5, 0.5)  # 50% smaller - Spring 1944 model is oversized
+
 				building.add_child(model_instance)
 				model_loaded = true
 				print("[ConstructionZone] Loaded building model: ", model_path)
@@ -743,3 +767,117 @@ func can_transition_to_destruction_state(target_state: BuildingData.DestructionS
 	if not building_data:
 		return false
 	return target_state in building_data.destruction_states
+
+
+## =============================================================================
+## HEALTH AND DAMAGE SYSTEM
+## =============================================================================
+
+func take_damage(amount: float, damage_type: String = "generic") -> void:
+	"""Apply damage to the building and update destruction state"""
+	if state != ZoneState.COMPLETE:
+		return  # Can't damage buildings under construction
+
+	if current_health <= 0:
+		return  # Already destroyed
+
+	current_health = maxf(current_health - amount, 0.0)
+
+	# Emit damage signal
+	building_damaged.emit(self, amount, current_health)
+
+	# Update destruction state based on health percentage
+	var health_percent: float = current_health / max_health if max_health > 0 else 0.0
+	_update_destruction_from_health(health_percent, damage_type)
+
+	# Check for destruction
+	if current_health <= 0:
+		_on_building_destroyed(damage_type)
+
+
+func _update_destruction_from_health(health_percent: float, damage_type: String) -> void:
+	"""Update destruction state based on remaining health"""
+	if not building_data:
+		return
+
+	var new_state: BuildingData.DestructionState = BuildingData.DestructionState.INTACT
+
+	if health_percent <= 0:
+		# Determine final destruction state based on damage type
+		match damage_type:
+			"fire", "napalm":
+				new_state = BuildingData.DestructionState.BURNED
+			"explosion", "artillery", "bomb":
+				if can_transition_to_destruction_state(BuildingData.DestructionState.EXPLODED):
+					new_state = BuildingData.DestructionState.EXPLODED
+				elif can_transition_to_destruction_state(BuildingData.DestructionState.CRATERED):
+					new_state = BuildingData.DestructionState.CRATERED
+				else:
+					new_state = BuildingData.DestructionState.DESTROYED
+			_:
+				new_state = BuildingData.DestructionState.DESTROYED
+	elif health_percent < 0.25:
+		# Heavily damaged - check for RUINS state
+		if can_transition_to_destruction_state(BuildingData.DestructionState.RUINS):
+			new_state = BuildingData.DestructionState.RUINS
+		elif can_transition_to_destruction_state(BuildingData.DestructionState.DAMAGED):
+			new_state = BuildingData.DestructionState.DAMAGED
+	elif health_percent < 0.5:
+		# Moderately damaged
+		if can_transition_to_destruction_state(BuildingData.DestructionState.DAMAGED):
+			new_state = BuildingData.DestructionState.DAMAGED
+
+	# Only update if state changed
+	if new_state != current_destruction_state:
+		set_destruction_state(new_state)
+
+
+func _on_building_destroyed(damage_type: String) -> void:
+	"""Handle building destruction"""
+	building_destroyed.emit(self)
+
+	# Emit global signal
+	if BattleSignals and BattleSignals.has_signal("building_destroyed"):
+		BattleSignals.building_destroyed.emit(self, building_data.building_type if building_data else -1)
+
+	# Log destruction
+	var building_name: String = building_data.display_name if building_data else "Unknown Building"
+	print("[ConstructionZone] %s destroyed by %s" % [building_name, damage_type])
+
+	# Disable any defensive components
+	if completed_building:
+		var defense: Node = completed_building.get_node_or_null("DefensiveStructure")
+		if defense and defense.has_method("set_active"):
+			defense.set_active(false)
+
+		var garrison: Node = completed_building.get_node_or_null("GarrisonableStructure")
+		if garrison and garrison.has_method("eject_all"):
+			garrison.eject_all()
+
+
+func heal(amount: float) -> void:
+	"""Repair the building"""
+	if state != ZoneState.COMPLETE:
+		return
+
+	current_health = minf(current_health + amount, max_health)
+
+	# Update destruction state based on new health
+	var health_percent: float = current_health / max_health if max_health > 0 else 0.0
+
+	# Repair restores to less damaged states
+	if health_percent >= 1.0:
+		set_destruction_state(BuildingData.DestructionState.INTACT)
+	elif health_percent >= 0.5 and current_destruction_state != BuildingData.DestructionState.INTACT:
+		if current_destruction_state in [BuildingData.DestructionState.RUINS, BuildingData.DestructionState.DAMAGED]:
+			set_destruction_state(BuildingData.DestructionState.DAMAGED)
+
+
+func get_health_percent() -> float:
+	"""Get health as percentage (0.0 to 1.0)"""
+	return current_health / max_health if max_health > 0 else 0.0
+
+
+func is_destroyed() -> bool:
+	"""Check if building is destroyed"""
+	return current_health <= 0

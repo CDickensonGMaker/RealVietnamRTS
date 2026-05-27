@@ -308,7 +308,7 @@ func spawn_explosion(position: Vector3, size: int = EffectType.EXPLOSION_MEDIUM)
 	tween.tween_callback(func(): explosion.visible = false)
 
 
-func spawn_tracer(start: Vector3, end: Vector3, is_enemy: bool = false) -> void:
+func spawn_tracer(start: Vector3, end: Vector3, is_enemy: bool = false, projectile_speed: float = 0.0) -> void:
 	if not effects_enabled:
 		return
 
@@ -342,8 +342,10 @@ func spawn_tracer(start: Vector3, end: Vector3, is_enemy: bool = false) -> void:
 
 	effect_spawned.emit(EffectType.TRACER_RED if not is_enemy else EffectType.TRACER_GREEN, start)
 
-	# Animate tracer moving
-	var flight_time: float = direction.length() / 500.0  # ~500 m/s bullet speed visual
+	# Animate tracer moving - use actual projectile speed if provided, else default
+	# Weapons range from 30 m/s (grenades) to 1030 m/s (tank rounds)
+	var actual_speed: float = projectile_speed if projectile_speed > 0.0 else 500.0
+	var flight_time: float = direction.length() / actual_speed
 	var tween := get_tree().create_tween()
 	tween.tween_property(tracer, "global_position", end, flight_time)
 	tween.tween_callback(func(): tracer.visible = false)

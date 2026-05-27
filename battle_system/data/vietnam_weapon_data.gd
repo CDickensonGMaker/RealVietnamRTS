@@ -35,6 +35,7 @@ enum DamageType {
 ## Weapon categories for organization.
 enum WeaponCategory {
 	RIFLE,
+	SMG,
 	MACHINE_GUN,
 	SIDEARM,
 	GRENADE_LAUNCHER,

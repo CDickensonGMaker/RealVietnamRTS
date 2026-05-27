@@ -363,12 +363,29 @@ func _update_single_view() -> void:
 		faction = data.faction
 	_faction_stripe.color = MilitaryTheme.faction_color(faction)
 
-	# Update state
-	if unit.has_method("get") and unit.get("state") != null:
+	# Update state - check for worker job first, then fall back to combat state
+	var state_name: String = "IDLE"
+	var state_color: Color = MilitaryTheme.COL_STATE_IDLE
+
+	# Check for WorkerController and active job
+	var worker_ctrl: Node = null
+	if unit.has_method("get_worker_controller"):
+		worker_ctrl = unit.get_worker_controller()
+	elif unit.has_node("WorkerController"):
+		worker_ctrl = unit.get_node("WorkerController")
+
+	if worker_ctrl and worker_ctrl.has_method("get") and worker_ctrl.get("current_job") != null:
+		var job = worker_ctrl.current_job
+		if job:
+			state_name = _get_job_display_name(job)
+			state_color = MilitaryTheme.COL_STATE_WORKING
+	elif unit.has_method("get") and unit.get("state") != null:
 		var state_val: int = unit.state
-		var state_name: String = _get_state_name(state_val)
-		_state_label.text = state_name
-		_state_badge.color = MilitaryTheme.state_color(state_name)
+		state_name = _get_state_name(state_val)
+		state_color = MilitaryTheme.state_color(state_name)
+
+	_state_label.text = state_name
+	_state_badge.color = state_color
 
 	# Update HP
 	var current_hp: float = 100.0
@@ -491,3 +508,28 @@ func _get_state_name(state_value: int) -> String:
 		4: return "DEAD"
 		5: return "CLEARING"
 		_: return "UNKNOWN"
+
+
+## Get display name for a worker job
+func _get_job_display_name(job) -> String:
+	if not job:
+		return "IDLE"
+
+	# Try to get job type name from UnifiedJob
+	if job.has_method("get_type_name"):
+		return job.get_type_name()
+
+	# Check for job_type enum
+	if "job_type" in job:
+		var job_type: int = job.job_type
+		match job_type:
+			0: return "CLEARING"
+			1: return "FLATTENING"
+			2: return "BUILDING"
+			3: return "REPAIRING"
+			4: return "DEMOLISHING"
+			5: return "SALVAGING"
+			6: return "DIGGING"
+			_: return "WORKING"
+
+	return "WORKING"

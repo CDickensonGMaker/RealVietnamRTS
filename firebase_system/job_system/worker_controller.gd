@@ -54,6 +54,7 @@ var _commitment_timer: float = 0.0
 var _job_search_timer: float = 0.0
 var _work_timer: float = 0.0
 var _stuck_timer: float = 0.0  # Track how long we've been stuck
+var _was_in_combat: bool = false  # Track previous combat state for edge detection
 
 ## Tree-felling state (CLEAR_TERRAIN jobs - worker walks to and chops individual trees)
 var _target_tree: Node3D = null  # The tree currently being chopped
@@ -92,6 +93,7 @@ const FLATTEN_SIZE: float = 6.0  # Size of path-clearing flatten area
 const MAX_PATH_CLEAR_ATTEMPTS: int = 3  # Abandon job after this many failed attempts
 const PROACTIVE_CHECK_DISTANCE: float = 15.0  # How far ahead to check for jungle
 const PROACTIVE_CHECK_INTERVAL: float = 5.0  # Meters between sample points
+const MAX_FLATTEN_SLOPE: float = 0.35  # Don't flatten terrain steeper than this (0.35 ≈ 20 degrees)
 
 ## Cached references
 var _job_system: Node = null
@@ -143,6 +145,17 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if not is_instance_valid(worker):
 		return
+
+	# Check if worker is in combat - pause job activities until combat ends
+	var in_combat: bool = _is_worker_in_combat()
+	if in_combat:
+		_was_in_combat = true
+		_handle_combat_state(delta)
+		return
+	elif _was_in_combat:
+		# Combat just ended - resume work activities
+		_was_in_combat = false
+		_on_combat_ended()
 
 	match state:
 		State.IDLE:
@@ -319,13 +332,14 @@ func _process_working(delta: float) -> void:
 	# Add work to job
 	_work_timer += delta
 	if _work_timer >= 0.1:  # Apply work every 0.1 seconds
-		var old_progress: float = current_job.get_progress()
 		_apply_work(_work_timer)
-		var new_progress: float = current_job.get_progress()
-		if new_progress > old_progress:
-			print("[WorkerController] %s applied work: job #%d progress %.1f%% -> %.1f%%" % [
-				worker.name, current_job.job_id, old_progress * 100, new_progress * 100
-			])
+		# Debug disabled - causes console spam
+		#var old_progress: float = current_job.get_progress()
+		#var new_progress: float = current_job.get_progress()
+		#if new_progress > old_progress:
+		#	print("[WorkerController] %s applied work: job #%d progress %.1f%% -> %.1f%%" % [
+		#		worker.name, current_job.job_id, old_progress * 100, new_progress * 100
+		#	])
 		_work_timer = 0.0
 
 
@@ -446,6 +460,17 @@ func _start_path_clearing() -> void:
 	if _terrain and _terrain.has_method("get_height_at"):
 		flatten_center.y = _terrain.get_height_at(flatten_center)
 
+	# CHECK SLOPE BEFORE FLATTENING - Don't dig into steep terrain
+	if _terrain and _terrain.has_method("get_slope_at"):
+		var slope: float = _terrain.get_slope_at(flatten_center)
+		if slope > MAX_FLATTEN_SLOPE:
+			# Terrain too steep - don't create flatten job, just abandon this path
+			print("[WorkerController] %s terrain too steep (%.0f%%) for flattening, abandoning path" % [
+				worker.name, slope * 100.0])
+			_path_clear_attempts = MAX_PATH_CLEAR_ATTEMPTS + 1  # Force abandon on next check
+			_stuck_timer = 0.0
+			return
+
 	# Create a small flatten job
 	var flatten_size := Vector2(FLATTEN_SIZE, FLATTEN_SIZE)
 	_path_clear_job = _job_system.create_job(
@@ -530,16 +555,17 @@ func _find_work() -> void:
 	)
 
 	if best_job:
-		print("[WorkerController] %s found job #%d (type %d)" % [worker.name, best_job.job_id, best_job.job_type])
+		# Debug disabled - causes console spam
+		#print("[WorkerController] %s found job #%d (type %d)" % [worker.name, best_job.job_id, best_job.job_type])
 		_claim_job(best_job)
-	else:
-		# Debug: Check what jobs exist
-		var all_jobs = _job_system.get_all_jobs()
-		var ready_jobs = _job_system.get_jobs_needing_workers(worker_class)
-		if all_jobs.size() > 0 or ready_jobs.size() > 0:
-			print("[WorkerController] %s (%s): %d total jobs, %d need workers, none selected" % [
-				worker.name, worker_class, all_jobs.size(), ready_jobs.size()
-			])
+	# Debug disabled - causes console spam (no-job-found logging)
+	#else:
+	#	var all_jobs = _job_system.get_all_jobs()
+	#	var ready_jobs = _job_system.get_jobs_needing_workers(worker_class)
+	#	if all_jobs.size() > 0 or ready_jobs.size() > 0:
+	#		print("[WorkerController] %s (%s): %d total jobs, %d need workers, none selected" % [
+	#			worker.name, worker_class, all_jobs.size(), ready_jobs.size()
+	#		])
 
 
 func _score_job(job: UnifiedJobClass) -> float:
@@ -1049,6 +1075,71 @@ func _release_carve_cell() -> void:
 
 
 ## =============================================================================
+## COMBAT AWARENESS
+## =============================================================================
+
+## Time spent in combat (for abandoning jobs after extended combat)
+var _combat_timer: float = 0.0
+const COMBAT_ABANDON_TIME: float = 10.0  # Abandon job after 10s of combat
+
+func _is_worker_in_combat() -> bool:
+	"""Check if the worker's parent unit is currently engaged in combat"""
+	if not is_instance_valid(worker):
+		return false
+
+	# Check for Squad state (most workers are Squads)
+	if "state" in worker:
+		# Squad.State enum: IDLE=0, MOVING=1, COMBAT=2, SUPPRESSED=3, DEAD=4, etc.
+		var worker_state: int = worker.state
+		# Combat states: COMBAT (2), SUPPRESSED (3), ROUTING (6)
+		if worker_state == 2 or worker_state == 3 or worker_state == 6:
+			return true
+
+	# Also check for active combat target
+	if "current_target" in worker and worker.current_target != null:
+		return true
+
+	return false
+
+
+func _handle_combat_state(delta: float) -> void:
+	"""Handle worker behavior while in combat"""
+	_combat_timer += delta
+
+	# After extended combat, abandon current job so worker can reacquire after combat
+	if _combat_timer >= COMBAT_ABANDON_TIME and current_job != null:
+		print("[WorkerController] %s abandoning job due to extended combat (%.1fs)" % [
+			worker.name, _combat_timer
+		])
+		_abandon_job("Engaged in extended combat")
+		_combat_timer = 0.0
+		return
+
+	# Worker is in combat - just wait for combat to end
+	# The Squad's combat AI handles movement during combat
+
+
+func _on_combat_ended() -> void:
+	"""Called when combat ends - resume work activities"""
+	_combat_timer = 0.0
+
+	# If we were working on a job, try to resume it
+	if current_job != null and is_instance_valid(current_job) and current_job.can_be_worked():
+		# Resume movement to job
+		move_target = current_job.get_work_position(worker)
+		_snap_target_to_terrain()
+		_set_state(State.MOVING_TO_JOB)
+
+		if worker.has_method("move_to"):
+			worker.move_to(move_target)
+
+		print("[WorkerController] %s resuming job #%d after combat" % [worker.name, current_job.job_id])
+	else:
+		# No valid job - go idle to find new work
+		_set_state(State.IDLE)
+
+
+## =============================================================================
 ## STATE MANAGEMENT
 ## =============================================================================
 
@@ -1083,7 +1174,8 @@ func _reset_commitment() -> void:
 
 
 func _determine_worker_class() -> void:
-	"""Determine worker class from unit data"""
+	"""Determine worker class from unit data.
+	Classes: 'engineer' (can build), 'bulldozer' (vehicles), 'infantry' (combat only)"""
 	if not worker:
 		return
 
@@ -1092,16 +1184,23 @@ func _determine_worker_class() -> void:
 		worker_class = worker.worker_class
 		return
 
-	# Check if it's a vehicle (bulldozer)
+	# Check unit data for capabilities
 	if worker.has_method("get"):
 		var data: Resource = worker.get("data")
-		if data and "is_vehicle" in data and data.is_vehicle:
-			worker_class = "bulldozer"
-			move_speed = 5.0  # Slower for bulldozers
-			return
+		if data:
+			# Bulldozer: vehicle with is_vehicle flag
+			if "is_vehicle" in data and data.is_vehicle:
+				worker_class = "bulldozer"
+				move_speed = 5.0  # Slower for bulldozers
+				return
+			# Engineer: infantry with can_build flag
+			if "can_build" in data and data.can_build:
+				worker_class = "engineer"
+				move_speed = 8.0
+				return
 
-	# Default to engineer
-	worker_class = "engineer"
+	# Default to infantry (cannot do construction jobs)
+	worker_class = "infantry"
 	move_speed = 8.0
 
 

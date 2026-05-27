@@ -113,7 +113,15 @@ var _grid_container: GridContainer
 var _thumbnail_buttons: Dictionary = {}  # key -> Button
 
 ## Current supply (for graying out unaffordable)
+## Now reads from SupplyManager as single source of truth
 var current_supply: int = 1000
+
+
+## Refresh supply from SupplyManager autoload (single source of truth)
+func _refresh_supply() -> void:
+	var supply_mgr := get_node_or_null("/root/SupplyManager")
+	if supply_mgr and supply_mgr.has_method("get_global_supply"):
+		current_supply = int(supply_mgr.get_global_supply())
 
 
 func _ready() -> void:
@@ -508,6 +516,7 @@ func _get_building_icon(key: String) -> String:
 
 
 func _update_button_states() -> void:
+	_refresh_supply()  # Always get latest from SupplyManager
 	for key in _thumbnail_buttons:
 		var container: Control = _thumbnail_buttons[key]
 		var entry: BuildingEntry = container.get_meta("entry")

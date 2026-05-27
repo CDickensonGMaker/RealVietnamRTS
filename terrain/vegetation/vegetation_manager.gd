@@ -31,14 +31,14 @@ var bundle_meters: float:
 
 # Terrain type properties: [tree_chance, tree_count_min, tree_count_max, blocks_los, move_speed]
 # move_speed: 1.0 = full speed, 0.5 = half speed, etc.
-# Reduced density for performance - billboards still provide jungle illusion
+# Increased density since billboard system is disabled - 3D trees only now
 const TYPE_PROPS := {
 	TerrainType.CLEAR:         [0.00, 0, 0, false, 1.0],
 	TerrainType.RICE_PADDY:    [0.00, 0, 0, false, 0.4],   # Water/mud - very slow
-	TerrainType.GRASSLAND:     [0.05, 0, 1, false, 0.95],  # Very sparse
-	TerrainType.LIGHT_JUNGLE:  [0.15, 0, 1, false, 0.8],   # Sparse
-	TerrainType.MEDIUM_JUNGLE: [0.30, 1, 2, true,  0.5],   # Moderate density
-	TerrainType.HEAVY_JUNGLE:  [0.50, 1, 3, true,  0.3],   # Dense canopy
+	TerrainType.GRASSLAND:     [0.08, 0, 1, false, 0.95],  # Very sparse
+	TerrainType.LIGHT_JUNGLE:  [0.25, 1, 2, false, 0.8],   # Sparse trees, faster movement
+	TerrainType.MEDIUM_JUNGLE: [0.45, 1, 3, true,  0.5],   # Moderate density
+	TerrainType.HEAVY_JUNGLE:  [0.70, 2, 4, true,  0.3],   # Dense canopy - use heavy tree models
 }
 
 # Loaded vegetation meshes
@@ -57,7 +57,8 @@ var _chunk_grass: Dictionary = {}  # Grass patches
 # Placement cache - built once per chunk, survives terrain changes
 var _chunk_placements: Dictionary = {}
 
-const TREE_CANDIDATES_PER_CHUNK := 2000
+# Increased from 2000 since billboard system disabled - more 3D trees needed
+const TREE_CANDIDATES_PER_CHUNK := 3500
 const GRASS_CANDIDATES_PER_CHUNK := 3000
 
 # Grass acceptance thresholds per terrain type
@@ -86,14 +87,36 @@ var _terrain_manager: Node = null
 # TerrainGrid reference (SINGLE SOURCE OF TRUTH)
 var _terrain_grid: RefCounted = null
 
+# Density noise for organic jungle variation (replaces random dice rolls)
+var _density_noise: FastNoiseLite
+var _clearing_noise: FastNoiseLite  # Creates natural clearings
+
 # Frustum culling accumulator (don't check every frame)
 var _frustum_accumulator: float = 0.0
-const FRUSTUM_UPDATE_INTERVAL := 0.1  # 10Hz
+const FRUSTUM_UPDATE_INTERVAL := 0.5  # 2Hz - Godot already handles frustum culling
 
 
 func _ready() -> void:
 	_min_slope_dot = cos(deg_to_rad(max_slope_degrees))
+	_init_density_noise()
 	_load_vegetation_meshes()
+
+
+## Initialize noise generators for organic jungle density variation
+func _init_density_noise() -> void:
+	# Main density noise - creates gradient jungle zones
+	_density_noise = FastNoiseLite.new()
+	_density_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	_density_noise.frequency = 0.003  # Large-scale variation (300m features)
+	_density_noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+	_density_noise.fractal_octaves = 3
+	_density_noise.seed = 54321
+
+	# Clearing noise - creates natural clearings and paths
+	_clearing_noise = FastNoiseLite.new()
+	_clearing_noise.noise_type = FastNoiseLite.TYPE_CELLULAR
+	_clearing_noise.frequency = 0.008  # Smaller features (125m clearings)
+	_clearing_noise.seed = 12345
 
 
 func _process(delta: float) -> void:
@@ -121,6 +144,43 @@ func set_chunk_size(size: float) -> void:
 ## Set terrain grid reference (SINGLE SOURCE OF TRUTH)
 func set_terrain_grid(grid: RefCounted) -> void:
 	_terrain_grid = grid
+
+	# Connect to ClearingSystem.vegetation_updated to regenerate billboards when trees are cleared
+	var clearing_sys: Node = get_node_or_null("/root/ClearingSystem")
+	if clearing_sys and clearing_sys.has_signal("vegetation_updated"):
+		if not clearing_sys.is_connected("vegetation_updated", _on_vegetation_updated):
+			clearing_sys.vegetation_updated.connect(_on_vegetation_updated)
+			print("[VegetationManager] Connected to ClearingSystem.vegetation_updated")
+
+
+## Handle vegetation updates from clearing system - regenerate affected chunks
+func _on_vegetation_updated(region: Rect2i) -> void:
+	# Convert region (in grid cells) to chunk coordinates
+	# TerrainGrid uses 4m cells, chunks are typically 64m
+	var cell_to_world: float = 4.0  # TerrainGrid.CELL_SIZE
+	var world_min_x: float = region.position.x * cell_to_world
+	var world_min_z: float = region.position.y * cell_to_world
+	var world_max_x: float = (region.position.x + region.size.x) * cell_to_world
+	var world_max_z: float = (region.position.y + region.size.y) * cell_to_world
+
+	# Find affected chunks
+	var min_chunk_x: int = int(floor(world_min_x / _chunk_size))
+	var min_chunk_z: int = int(floor(world_min_z / _chunk_size))
+	var max_chunk_x: int = int(ceil(world_max_x / _chunk_size))
+	var max_chunk_z: int = int(ceil(world_max_z / _chunk_size))
+
+	# Regenerate affected chunks
+	for cz in range(min_chunk_z, max_chunk_z + 1):
+		for cx in range(min_chunk_x, max_chunk_x + 1):
+			var chunk_coord := Vector2i(cx, cz)
+			if _chunk_terrain.has(chunk_coord):
+				# Get heightmap for regeneration (null is acceptable)
+				var heightmap: Object = null
+				if _terrain_grid and _terrain_grid.has_method("get_heightmap"):
+					heightmap = _terrain_grid.get_heightmap()
+				regenerate_chunk(chunk_coord, heightmap)
+
+	print("[VegetationManager] Regenerated chunks for cleared region: %s" % region)
 
 
 ## Update visibility based on frustum and distance
@@ -374,35 +434,65 @@ func regenerate_chunk(chunk_coord: Vector2i, heightmap: Object) -> void:
 	_materialize_grass(chunk_coord, heightmap)
 
 
-## Determine terrain type for a bundle (legacy fallback)
-## world_x/world_z are passed for water proximity checks
+## Determine terrain type for a bundle using noise for organic variation
+## Creates natural-looking jungle density zones based on real Vietnam terrain patterns
+## world_x/world_z are used for noise sampling and water proximity checks
 func _determine_terrain_type(height: float, slope_dot: float, rng: RandomNumberGenerator, world_x: float = 0.0, world_z: float = 0.0) -> int:
-	# Steep slopes = clear
+	# Steep slopes = clear (no vegetation on cliffs)
 	if slope_dot < _min_slope_dot:
 		return TerrainType.CLEAR
+
+	# Sample noise for organic density variation
+	var density_value: float = 0.5  # Default to moderate
+	var clearing_value: float = 0.0
+	if _density_noise:
+		density_value = (_density_noise.get_noise_2d(world_x, world_z) + 1.0) * 0.5  # Normalize to 0-1
+	if _clearing_noise:
+		clearing_value = _clearing_noise.get_noise_2d(world_x, world_z)
+
+	# Natural clearings from cellular noise (creates organic gaps in jungle)
+	if clearing_value > 0.7:
+		# High cellular value = clearing edge or center
+		if clearing_value > 0.85:
+			return TerrainType.GRASSLAND  # Center of clearing
+		return TerrainType.LIGHT_JUNGLE  # Edge of clearing
 
 	# Check water proximity for rice paddy clustering
 	var near_water := false
 	if _terrain_manager and _terrain_manager.has_method("is_near_water"):
 		near_water = _terrain_manager.is_near_water(world_x, world_z)
 
-	# Low flat areas have chance of rice paddy - higher near water
+	# Rice paddies: low flat areas near water (Mekong Delta style)
 	if height < 30.0 and slope_dot > 0.93:
-		var paddy_chance: float = 0.7 if near_water else 0.15
-		if rng.randf() < paddy_chance:
+		var paddy_chance: float = 0.8 if near_water else 0.2
+		# Use noise to create clustered paddies, not random scatter
+		var paddy_noise: float = density_value + (0.3 if near_water else 0.0)
+		if paddy_noise > 0.6 and rng.randf() < paddy_chance:
 			return TerrainType.RICE_PADDY
 
-	# Very flat = grassland chance
-	if slope_dot > 0.98 and rng.randf() < 0.2:
-		return TerrainType.GRASSLAND
+	# Highland terrain (Central Highlands style) - more grassland
+	if height > 80.0:
+		# Higher elevation = more likely to be light jungle or grassland
+		density_value *= 0.7  # Reduce density at altitude
+		if density_value < 0.3:
+			return TerrainType.GRASSLAND
 
-	# Random jungle density
-	var density_roll := rng.randf()
-	if density_roll < 0.2:
+	# Use noise-based density for jungle type
+	# Creates organic zones of varying density like real Vietnam terrain
+	if density_value < 0.25:
+		# Low density zone - grassland or light jungle
+		return TerrainType.GRASSLAND if rng.randf() < 0.3 else TerrainType.LIGHT_JUNGLE
+	elif density_value < 0.45:
+		# Moderate-low density - light to medium jungle
 		return TerrainType.LIGHT_JUNGLE
-	elif density_roll < 0.5:
+	elif density_value < 0.65:
+		# Moderate density - medium jungle (most common)
 		return TerrainType.MEDIUM_JUNGLE
+	elif density_value < 0.85:
+		# High density - medium to heavy
+		return TerrainType.MEDIUM_JUNGLE if rng.randf() < 0.4 else TerrainType.HEAVY_JUNGLE
 	else:
+		# Very high density - heavy jungle (triple canopy zones)
 		return TerrainType.HEAVY_JUNGLE
 
 

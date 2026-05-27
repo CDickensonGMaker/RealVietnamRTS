@@ -245,6 +245,29 @@ func _on_job_progress() -> void:
 		rebuild_mesh()
 
 
+## Setup from TerrainSpline (smooth terrain-following curves)
+func setup_from_spline(spline: RefCounted, width: float = DEFAULT_ROAD_WIDTH) -> void:
+	"""Setup road from a TerrainSpline for smooth terrain-following curves.
+
+	The spline generates a mesh that naturally follows terrain contours with
+	Catmull-Rom smoothing. Replaces the waypoint-based linear segments.
+	"""
+	_road_width = width
+	_progress = 1.0  # Spline roads render completely
+
+	if not spline or not spline.has_method("generate_road_mesh"):
+		push_warning("RoadDecalRenderer: Invalid spline provided")
+		mesh = null
+		return
+
+	# Use spline's mesh generation with proper width
+	mesh = spline.generate_road_mesh(width)
+
+	# Cache waypoints from spline for compatibility
+	if spline.has_method("sample_points"):
+		_waypoints = spline.sample_points(20)
+
+
 ## Static factory method
 static func create_for_waypoints(waypoints: PackedVector3Array, width: float = DEFAULT_ROAD_WIDTH) -> RoadDecalRenderer:
 	var road := RoadDecalRenderer.new()
@@ -258,4 +281,18 @@ static func create_for_job(job: UnifiedJob) -> RoadDecalRenderer:
 	var road := RoadDecalRenderer.new()
 	road.name = "RoadDecal_Job%d" % job.job_id
 	road.connect_to_job(job)
+	return road
+
+
+static func create_for_spline(spline: RefCounted, width: float = DEFAULT_ROAD_WIDTH) -> RoadDecalRenderer:
+	"""Factory method to create road from TerrainSpline.
+
+	Usage:
+		var spline := TerrainSpline.create_from_points(waypoints, terrain)
+		var road := RoadDecalRenderer.create_for_spline(spline, 4.0)
+		add_child(road)
+	"""
+	var road := RoadDecalRenderer.new()
+	road.name = "RoadDecal_Spline"
+	road.setup_from_spline(spline, width)
 	return road

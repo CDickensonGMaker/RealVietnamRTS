@@ -278,29 +278,34 @@ func create_build_job(center: Vector3, building_type: int, rotation: float = 0.0
 			push_warning("[JobSystem] Cannot build %s: %s" % [data.display_name, validation.message])
 			return null
 
-	# Find nearest firebase for supply check
+	# Find nearest firebase (for zone checks, not supply)
 	var firebase: Node = _get_nearest_firebase(center)
 	var supply_cost: int = data.supply_cost
 
-	# Check supply (skip for free buildings like light sandbags)
-	if supply_cost > 0:
-		if not firebase:
-			push_warning("[JobSystem] No firebase found for supply check - building %s" % data.display_name)
-			# Allow building anyway but warn (for testing without firebase)
-		elif firebase.supply_level < supply_cost:
-			push_warning("[JobSystem] Insufficient supply for %s (need %d, have %.0f)" % [
-				data.display_name, supply_cost, firebase.supply_level
-			])
-			return null
-		else:
-			# Deduct supply now (not when ghost placed)
-			firebase.supply_level -= supply_cost
-			print("[JobSystem] Deducted %d supply for %s (%.0f remaining)" % [
-				supply_cost, data.display_name, firebase.supply_level
+	# Check global supply for construction costs
+	# Firebase local supply is for unit resupply (water, fuel), not building costs
+	# HQ buildings can be built without supply - they bootstrap new firebases
+	var is_hq: bool = data.is_hq_building if "is_hq_building" in data else false
+	if supply_cost > 0 and not is_hq:
+		var supply_mgr: Node = get_node_or_null("/root/SupplyManager")
+		if supply_mgr:
+			if not supply_mgr.can_afford(float(supply_cost)):
+				push_warning("[JobSystem] Insufficient global supply for %s (need %d, have %.0f)" % [
+					data.display_name, supply_cost, supply_mgr.get_global_supply()
+				])
+				return null
+			# Deduct from global supply
+			supply_mgr.consume_global_supply(float(supply_cost))
+			print("[JobSystem] Deducted %d global supply for %s (%.0f remaining)" % [
+				supply_cost, data.display_name, supply_mgr.get_global_supply()
 			])
 			# Emit supply consumed signal for HUD update
 			if BattleSignals:
 				BattleSignals.supply_consumed.emit(firebase, float(supply_cost), "construction: " + data.display_name)
+		else:
+			push_warning("[JobSystem] SupplyManager not found - allowing build without supply check")
+	elif is_hq:
+		print("[JobSystem] HQ building %s bypasses supply check (creates new firebase)" % data.display_name)
 
 	# Create prerequisite jobs with HIGH priority to match the build job
 	# For buildings: only create flatten job if slope is too steep (>0.25 ≈ 15 degrees)
@@ -655,12 +660,7 @@ func add_work(job: UnifiedJobClass, worker: Node3D, delta: float) -> void:
 	# Use generous range (4.0m) to match WorkerController's arrival threshold
 	# Prevents workers from arriving but failing to apply work due to range mismatch
 	if not job.is_worker_in_range(worker, 4.0):
-		# Debug: Log when work fails due to range
-		var dist_to_bounds: float = _get_distance_to_bounds(job, worker)
-		print("[JobSystem] %s out of range for job #%d (dist=%.1fm, need<=4.0m)" % [
-			worker.name, job.job_id, dist_to_bounds
-		])
-		return
+		return  # Silent early return - debug print removed for performance
 
 	# Calculate work rate based on worker type
 	var worker_class: String = get_worker_class(worker)
@@ -1415,7 +1415,8 @@ func validate_placement(center: Vector3, footprint_size: Vector2, building_type:
 
 	# Special validation for bridges - must span water or ravine
 	# Bridges skip standard slope/water checks since they're meant to span these
-	if building_type == BuildingDataClass.BuildingType.MODULAR_BRIDGE:
+	var is_bridge: bool = building_type == BuildingDataClass.BuildingType.MODULAR_BRIDGE or building_type == BuildingDataClass.BuildingType.PONTOON_BRIDGE
+	if is_bridge:
 		var bridge_result: Dictionary = validate_bridge_placement(center, footprint_size, rotation_y)
 		if not bridge_result.valid:
 			return {
@@ -1818,7 +1819,8 @@ func validate_placement_real_time(center: Vector3, footprint_size: Vector2, buil
 
 	# Create cache key (quantized to 0.5m grid for cache efficiency)
 	# Include rotation in key for bridges (quantized to 15 degrees)
-	var rot_key: int = int(rotation_y * 12.0 / TAU) if building_type == BuildingDataClass.BuildingType.MODULAR_BRIDGE else 0
+	var is_bridge_type: bool = building_type == BuildingDataClass.BuildingType.MODULAR_BRIDGE or building_type == BuildingDataClass.BuildingType.PONTOON_BRIDGE
+	var rot_key: int = int(rotation_y * 12.0 / TAU) if is_bridge_type else 0
 	var key := "%d_%d_%d_%d" % [int(center.x * 2), int(center.z * 2), building_type, rot_key]
 
 	# Return cached result if available

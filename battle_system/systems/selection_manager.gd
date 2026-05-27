@@ -81,11 +81,21 @@ func _process(delta: float) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	# Right-click: deselect all units (if not issuing a command)
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed and not _is_mouse_over_gui():
+			# Only deselect if Ctrl is held (to distinguish from move commands)
+			# Or deselect if no units are selected
+			if Input.is_key_pressed(KEY_CTRL) or selected_units.is_empty():
+				clear_selection()
+
 	# Left-click selection
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		# CRITICAL: Ignore clicks over GUI elements (command panel, minimap, etc.)
 		# This prevents selection from clearing when clicking UI buttons
 		if _is_mouse_over_gui():
+			# Cancel any active drag if clicking on GUI
+			cancel_drag_selection()
 			return
 
 		if event.pressed:
@@ -119,7 +129,21 @@ func _input(event: InputEvent) -> void:
 		_handle_key_input(event)
 
 
+## Cancel any active drag selection (called externally when clicking GUI)
+func cancel_drag_selection() -> void:
+	if is_dragging or (_selection_box_visual and _selection_box_visual.is_dragging()):
+		is_dragging = false
+		if _selection_box_visual:
+			_selection_box_visual.finish_drag()
+
+
 func _handle_key_input(event: InputEventKey) -> void:
+	# ESC: Clear selection and cancel drag
+	if event.keycode == KEY_ESCAPE:
+		cancel_drag_selection()
+		clear_selection()
+		return
+
 	# Ctrl+G: Create next available group (1-9)
 	if event.ctrl_pressed and event.keycode == KEY_G:
 		_create_next_group()
@@ -179,6 +203,59 @@ func _single_select(screen_pos: Vector2) -> void:
 		clear_selection()
 		if unit and _is_player_unit(unit):
 			_add_to_selection(unit)
+		elif not unit:
+			# No unit clicked - check for building
+			_check_building_click(screen_pos)
+
+
+func _check_building_click(screen_pos: Vector2) -> void:
+	"""Check if click hit a building and emit building_selected signal"""
+	var camera: Camera3D = _get_battle_camera()
+	if not camera:
+		return
+
+	var from: Vector3 = camera.project_ray_origin(screen_pos)
+	var dir: Vector3 = camera.project_ray_normal(screen_pos)
+
+	var space_state: PhysicsDirectSpaceState3D = camera.get_world_3d().direct_space_state
+	if not space_state:
+		return
+
+	var query := PhysicsRayQueryParameters3D.create(from, from + dir * 1000.0)
+	query.collision_mask = 64  # Layer 7: Buildings
+
+	var result: Dictionary = space_state.intersect_ray(query)
+	if result.is_empty():
+		return
+
+	var collider: Node3D = result.get("collider")
+	if not collider:
+		return
+
+	# Walk up tree to find ConstructionZone or building with data
+	var building: Node3D = collider
+	var zone: Node = null
+
+	var parent: Node = collider.get_parent()
+	while parent:
+		if parent.has_method("get") and parent.get("building_data") != null:
+			zone = parent
+			break
+		if parent is Node3D and parent.has_node("GarrisonableStructure"):
+			building = parent
+			break
+		if parent is Node3D and parent.has_node("DefensiveStructure"):
+			building = parent
+			break
+		parent = parent.get_parent()
+
+	# Emit building selected signal
+	if zone:
+		BattleSignals.building_selected.emit(zone)
+	elif building != collider:
+		BattleSignals.building_selected.emit(building)
+	else:
+		BattleSignals.building_selected.emit(collider)
 
 
 func _finish_drag_select(end_pos: Vector2) -> void:
@@ -418,7 +495,43 @@ func _is_mouse_over_gui() -> bool:
 				if _is_point_in_control(child as Control, mouse_pos):
 					return true
 
+	# Check for minimap specifically (it may be in a different layer)
+	var minimap: Control = _find_minimap()
+	if minimap and minimap.visible:
+		var rect: Rect2 = minimap.get_global_rect()
+		if rect.has_point(mouse_pos):
+			return true
+
 	return false
+
+
+## Find the tactical minimap control
+func _find_minimap() -> Control:
+	# Check common minimap locations
+	var paths: Array[String] = [
+		"/root/BattleHUD/TacticalMinimap",
+		"/root/TacticalMinimap",
+	]
+	for path in paths:
+		var node: Node = get_node_or_null(path)
+		if node and node is Control:
+			return node as Control
+
+	# Search in current scene
+	var scene: Node = get_tree().current_scene
+	if scene:
+		var minimap: Node = scene.get_node_or_null("TacticalMinimap")
+		if minimap and minimap is Control:
+			return minimap as Control
+
+		# Check canvas layers
+		for child in scene.get_children():
+			if child is CanvasLayer:
+				for canvas_child in child.get_children():
+					if canvas_child.name.contains("Minimap") and canvas_child is Control:
+						return canvas_child as Control
+
+	return null
 
 
 ## Recursively check if a point is inside a control or its children

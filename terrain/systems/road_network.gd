@@ -67,6 +67,7 @@ class RoadSegment:
 	var length: float = 0.0
 	var connected_segments: Array[int] = []
 	var is_bridge: bool = false  # True if this segment spans water/ravine
+	var spline: RefCounted = null  # Optional TerrainSpline for smooth curves
 
 	func _init(seg_id: int, p_start: Vector3, p_end: Vector3, p_type: int = RoadType.DIRT_TRAIL, p_is_bridge: bool = false) -> void:
 		id = seg_id
@@ -77,6 +78,33 @@ class RoadSegment:
 		repair_progress = 0.0
 		length = start.distance_to(end)
 		is_bridge = p_is_bridge
+
+	## Get actual length (uses spline if available)
+	func get_length() -> float:
+		if spline and spline.has_method("get_total_length"):
+			return spline.get_total_length()
+		return length
+
+	## Set spline for this segment (overrides linear length)
+	func set_spline(p_spline: RefCounted) -> void:
+		spline = p_spline
+		if spline and spline.has_method("get_total_length"):
+			length = spline.get_total_length()
+
+	## Get position at distance along segment (uses spline if available)
+	func get_position_at_distance(dist: float) -> Vector3:
+		if spline and spline.has_method("get_position_at_distance"):
+			return spline.get_position_at_distance(dist)
+		# Fallback to linear interpolation
+		var t: float = clampf(dist / maxf(0.001, length), 0.0, 1.0)
+		return start.lerp(end, t)
+
+	## Get tangent at distance (uses spline if available)
+	func get_tangent_at_distance(dist: float) -> Vector3:
+		if spline and spline.has_method("get_tangent_at_distance"):
+			return spline.get_tangent_at_distance(dist)
+		# Fallback to linear direction
+		return (end - start).normalized()
 
 	## Get midpoint for damage checks
 	func get_midpoint() -> Vector3:
@@ -325,7 +353,8 @@ func _astar_path(start_id: int, end_id: int) -> Array[int]:
 				continue
 
 			# Calculate travel cost (distance / speed multiplier)
-			var travel_cost: float = segment.length / maxf(0.1, segment.get_speed_multiplier())
+			# Uses get_length() which respects spline length if present
+			var travel_cost: float = segment.get_length() / maxf(0.1, segment.get_speed_multiplier())
 			var tentative_g: float = g_score[current] + travel_cost
 
 			var current_g: float = g_score.get(neighbor_id, INF)
@@ -600,6 +629,59 @@ func get_damaged_segments() -> Array[RoadSegment]:
 # BULK CREATION API (for map generation)
 # =============================================================================
 
+## Create a road segment from a TerrainSpline (smooth terrain-following curve)
+func create_segment_from_spline(spline: RefCounted, road_type: int = RoadType.DIRT_TRAIL) -> int:
+	"""Create a road segment from a TerrainSpline.
+
+	The spline provides smooth terrain-following curves for natural-looking roads.
+	Uses spline endpoints for node connections but stores full spline for navigation.
+	"""
+	if not spline or not spline.has_method("get_waypoint_count"):
+		push_warning("[RoadNetwork] Invalid spline provided")
+		return -1
+
+	if spline.get_waypoint_count() < 2:
+		push_warning("[RoadNetwork] Spline needs at least 2 waypoints")
+		return -1
+
+	# Get start/end from spline waypoints
+	var start_pos: Vector3 = spline.get_waypoint(0)
+	var end_pos: Vector3 = spline.get_waypoint(spline.get_waypoint_count() - 1)
+
+	# Find or create nodes at endpoints
+	var start_node_id: int = _find_or_create_node(start_pos)
+	var end_node_id: int = _find_or_create_node(end_pos)
+
+	var start_node: RoadNode = _nodes[start_node_id]
+	var end_node: RoadNode = _nodes[end_node_id]
+
+	# Create segment with spline
+	var segment := RoadSegment.new(
+		_next_segment_id,
+		start_node.position,
+		end_node.position,
+		road_type
+	)
+	segment.set_spline(spline)
+
+	_segments[_next_segment_id] = segment
+
+	# Update node connections
+	start_node.connected_nodes.append(end_node_id)
+	start_node.connected_segments.append(_next_segment_id)
+	end_node.connected_nodes.append(start_node_id)
+	end_node.connected_segments.append(_next_segment_id)
+
+	# Add to spatial grid
+	_add_segment_to_grid(segment)
+
+	var seg_id: int = _next_segment_id
+	_next_segment_id += 1
+
+	print("[RoadNetwork] Created spline segment #%d (%.1fm)" % [seg_id, segment.get_length()])
+	return seg_id
+
+
 ## Create a road from array of positions (for map setup)
 func create_road_from_waypoints(waypoints: Array[Vector3], road_type: int = RoadType.DIRT_TRAIL) -> Array[int]:
 	var segment_ids: Array[int] = []
@@ -732,7 +814,7 @@ func get_stats() -> Dictionary:
 
 	for seg_id: int in _segments:
 		var segment: RoadSegment = _segments[seg_id]
-		total_length += segment.length
+		total_length += segment.get_length()  # Respects spline length
 		if segment.is_bridge:
 			bridge_count += 1
 		match segment.state:

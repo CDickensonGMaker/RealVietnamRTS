@@ -160,18 +160,33 @@ func world_to_cell(world_x: float, world_z: float) -> Vector2i:
 
 ## Modify heightmap in a circular region (for damage/clearing)
 func modify_region(center: Vector2i, radius: int, modifier: Callable) -> Rect2i:
+	# Safety: Ensure data array exists and is properly sized
+	if data.is_empty():
+		push_warning("[HeightmapStorage] modify_region called with empty data array")
+		return Rect2i()
+
+	# Use actual data size for bounds checking, not just the 'size' variable
+	var actual_side: int = int(sqrt(float(data.size())))
+	var safe_size: int = mini(size, actual_side)
+
 	var min_x: int = maxi(0, center.x - radius)
-	var max_x: int = mini(size, center.x + radius + 1)
+	var max_x: int = mini(safe_size, center.x + radius + 1)
 	var min_z: int = maxi(0, center.y - radius)
-	var max_z: int = mini(size, center.y + radius + 1)
+	var max_z: int = mini(safe_size, center.y + radius + 1)
+
+	# Early exit if center is completely outside bounds
+	if min_x >= safe_size or min_z >= safe_size or max_x <= 0 or max_z <= 0:
+		return Rect2i()
 
 	for z in range(min_z, max_z):
 		for x in range(min_x, max_x):
 			var dist: float = Vector2(x - center.x, z - center.y).length()
 			if dist <= radius:
-				var idx: int = z * size + x
-				var falloff: float = 1.0 - smoothstep(0.0, float(radius), dist)
-				data[idx] = modifier.call(data[idx], falloff)
+				var idx: int = z * safe_size + x
+				# Final bounds check against actual array size
+				if idx >= 0 and idx < data.size():
+					var falloff: float = 1.0 - smoothstep(0.0, float(radius), dist)
+					data[idx] = modifier.call(data[idx], falloff)
 
 	return Rect2i(min_x, min_z, max_x - min_x, max_z - min_z)
 

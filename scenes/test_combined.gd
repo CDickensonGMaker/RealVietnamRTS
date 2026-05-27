@@ -91,6 +91,12 @@ func _ready() -> void:
 	print("========================================")
 	print("")
 
+	# Disable test daemon to prevent freeze-causing synchronous file I/O
+	var test_daemon = get_node_or_null("/root/TestDaemon")
+	if test_daemon:
+		test_daemon._enabled = false
+		print("[TestCombined] Disabled TestDaemon for performance")
+
 	# Show loading overlay immediately
 	_create_loading_overlay()
 	_show_loading("Initializing...")
@@ -336,7 +342,10 @@ func _setup_vegetation() -> void:
 	billboard_vegetation.set_vegetation_manager(vegetation_manager)
 
 	if terrain_intg and terrain_intg.terrain_grid:
+		# CRITICAL: Connect VegetationManager to terrain grid for clearing signal chain
+		vegetation_manager.set_terrain_grid(terrain_intg.terrain_grid)
 		billboard_vegetation.set_terrain_grid(terrain_intg.terrain_grid)
+		print("[TestCombined] VegetationManager connected to TerrainGrid for clearing signals")
 
 	billboard_vegetation.billboards_per_chunk = TEST_BILLBOARD_COUNT
 	billboard_vegetation.billboard_range_min = 80.0
@@ -564,6 +573,9 @@ func _spawn_workers(hq_pos: Vector3) -> void:
 
 	print("[TestCombined] Spawned 2 Engineers + 2 Bulldozers")
 
+	# Diagnostic: Verify workers have WorkerController
+	call_deferred("_verify_worker_controllers")
+
 
 func _spawn_combat_units(hq_pos: Vector3) -> void:
 	print("[TestCombined] Spawning combat units...")
@@ -698,8 +710,27 @@ func _create_initial_clearing_job() -> void:
 		print("[TestCombined] Initial clearing job #%d at %v (15x15m)" % [job.job_id, job_center])
 
 
+func _verify_worker_controllers() -> void:
+	"""Diagnostic: Verify all workers have WorkerController attached"""
+	print("\n=== WORKER DIAGNOSTIC ===")
+	for worker in workers:
+		if not is_instance_valid(worker):
+			print("  [INVALID] Worker reference invalid")
+			continue
+		var has_wc: bool = worker.has_method("get_worker_controller") and worker.get_worker_controller() != null
+		var can_build: bool = worker.data.can_build if worker.data else false
+		var worker_class: String = "unknown"
+		if has_wc:
+			var wc = worker.get_worker_controller()
+			worker_class = wc.worker_class if wc else "none"
+		print("  %s: can_build=%s, has_controller=%s, class=%s" % [
+			worker.name, can_build, has_wc, worker_class
+		])
+	print("=========================\n")
+
+
 func _on_job_created(job) -> void:
-	print("[TestCombined] Job created: #%d %s" % [job.job_id, UnifiedJobClass.get_type_name(job.job_type)])
+	print("[TestCombined] Job created: #%d %s at %v" % [job.job_id, UnifiedJobClass.get_type_name(job.job_type), job.get_centroid()])
 
 
 func _on_job_completed(job) -> void:

@@ -10,6 +10,8 @@ const SquadMoraleScript = preload("res://battle_system/morale/squad_morale.gd")
 const MoraleConstants = preload("res://battle_system/morale/morale_constants.gd")
 const PieceAnimatorScript = preload("res://battle_system/animation/piece_animator.gd")
 const Spring1944PosesScript = preload("res://battle_system/animation/spring1944_poses.gd")
+const SquadCommanderAIScript = preload("res://battle_system/ai/squad_commander_ai.gd")
+const SuppressionZoneScript = preload("res://battle_system/combat/suppression_zone.gd")
 
 ## Model paths for each unit type by faction
 const MODEL_PATHS: Dictionary = {
@@ -116,9 +118,26 @@ const SLOPE_QUERY_INTERVAL: float = 0.1
 var _slope_query_timer: float = 0.0
 var _cached_slope: float = 0.0
 
-# Ammo tracking
-var current_ammo: int = 100  # Magazine rounds
-var max_ammo: int = 100
+# Ammo tracking - total rounds carried, not just magazine
+# Standard combat load: ~7 magazines for rifles (Vietnam era)
+# Fix 1 (continued): M16 uses 30-round magazines, 7 mags = 210 total rounds
+const MAGAZINES_CARRIED: int = 7
+const MAGAZINE_SIZE: int = 30  # M16 30-round magazine
+var current_ammo: int = 210  # Total rounds (7 x 30-round mag for M16)
+var max_ammo: int = 210
+
+# Melee combat system (simplified for Vietnam-era bayonet fighting)
+const MELEE_RANGE: float = 3.0  # Close enough for bayonet/hand-to-hand
+const MELEE_DAMAGE_PER_TICK: float = 25.0  # Damage per melee tick
+const MELEE_TICK_RATE: float = 0.5  # Melee resolution every 0.5 seconds
+var _melee_tick_timer: float = 0.0
+var _is_in_melee: bool = false
+
+# Per-soldier weapon system (CoH/Warno style - each soldier has their own weapon and cooldown)
+# Each dict: { "weapon_id": String, "cooldown": float, "is_alive": bool }
+# Example for 10-soldier rifle squad: 8x M16, 1x M60, 1x M79
+var _soldier_weapons: Array[Dictionary] = []
+var _soldier_weapon_cooldowns: Array[float] = []  # Per-soldier attack cooldown timers
 
 # Water tracking (PRD: internal resource that depletes over time)
 var current_water: int = 100
@@ -207,6 +226,49 @@ var guard_position: Vector3 = Vector3.ZERO
 var guard_radius: float = 50.0
 
 # =============================================================================
+# STATE STACK (OpenRTS pattern - combat interrupts, then resumes previous state)
+# =============================================================================
+
+## State stack for interrupt/resume behavior (e.g., combat interrupts patrol)
+## When combat ends, pop stack to resume previous activity
+var _state_stack: Array[State] = []
+
+## Push current state onto stack before transitioning (for resumable states)
+func _push_state() -> void:
+	# Don't push certain states that shouldn't be resumed
+	if state in [State.DEAD, State.ROUTING]:
+		return
+	# Avoid duplicate pushes
+	if _state_stack.is_empty() or _state_stack[-1] != state:
+		_state_stack.append(state)
+		# Limit stack depth to prevent memory issues
+		if _state_stack.size() > 5:
+			_state_stack.pop_front()
+
+## Pop and return to previous state (if any)
+func _pop_state() -> void:
+	if _state_stack.is_empty():
+		state = State.IDLE
+		return
+	state = _state_stack.pop_back()
+	# Resume standing order behavior if returning to IDLE/MOVING
+	if state in [State.IDLE, State.MOVING] and standing_order != StandingOrder.NONE:
+		_resume_standing_order()
+
+## Resume standing order after interrupt (combat, suppression, etc.)
+func _resume_standing_order() -> void:
+	match standing_order:
+		StandingOrder.PATROL:
+			if not patrol_waypoints.is_empty():
+				_move_to_next_patrol_point()
+		StandingOrder.GUARD:
+			var dist_to_guard: float = global_position.distance_to(guard_position)
+			if dist_to_guard > 5.0:
+				move_to(guard_position)
+		StandingOrder.AUTO_REPAIR:
+			pass  # Auto-repair continues automatically
+
+# =============================================================================
 # BEHAVIOR TREE INTEGRATION
 # =============================================================================
 
@@ -218,6 +280,10 @@ var assigned_behavior: int = -1
 
 ## Whether BT is paused (e.g., player issuing direct commands)
 var bt_paused: bool = false
+
+## Squad Commander AI (tactical decision-making for non-player squads)
+## Uses behavior tree + blackboard system from BP RTS DARK SHADOWS
+var squad_commander_ai: RefCounted = null
 
 
 func _ready() -> void:
@@ -244,6 +310,10 @@ func _ready() -> void:
 	# Connect to global morale events
 	BattleSignals.nearby_squad_destroyed.connect(_on_nearby_squad_destroyed)
 
+	# Setup Squad Commander AI for non-player units (tactical decision-making)
+	if not is_player_controlled and data:
+		_setup_squad_commander_ai()
+
 	BattleSignals.unit_spawned.emit(self, data.faction if data else 0)
 
 
@@ -268,15 +338,22 @@ func _physics_process(delta: float) -> void:
 	# Process cover detection and seeking (Phase 4.2)
 	_process_cover_behavior(delta)
 
-	# Process combat cooldown
+	# Process combat cooldown (legacy single cooldown)
 	if attack_cooldown > 0.0:
 		attack_cooldown -= delta
+
+	# Process per-soldier weapon cooldowns (CoH/Warno style)
+	for i in _soldier_weapon_cooldowns.size():
+		if _soldier_weapon_cooldowns[i] > 0.0:
+			_soldier_weapon_cooldowns[i] -= delta
 
 	# Process combat if we have a target
 	if state == State.ROUTING:
 		_process_routing(delta)
 	elif state == State.RESUPPLYING:
 		_process_resupplying(delta)
+	elif _is_suppressing and state == State.COMBAT:
+		_process_suppressive_fire(delta)
 	elif current_target and state == State.COMBAT:
 		_process_combat(delta)
 	elif is_clearing and state == State.CLEARING:
@@ -531,6 +608,9 @@ func _scan_for_auto_engage_targets() -> void:
 	# Don't override existing target
 	if current_target and is_instance_valid(current_target):
 		return
+	# Don't auto-engage if unit can't attack (bulldozers, unarmed vehicles)
+	if data and (data.attack_range <= 0.0 or data.damage_per_second <= 0.0):
+		return
 
 	# Get weapon range from data
 	var weapon_range: float = 300.0
@@ -626,6 +706,12 @@ func _die() -> void:
 	if vet_tracker and vet_tracker.has_method("unregister_unit"):
 		vet_tracker.unregister_unit(self)
 
+	# Unregister SquadCommanderAI from AITickManager
+	var tick_mgr := get_node_or_null("/root/AITickManager")
+	if squad_commander_ai and tick_mgr:
+		tick_mgr.unregister_commander(squad_commander_ai)
+		squad_commander_ai = null
+
 	# Visual feedback
 	if _mesh_instance:
 		_mesh_instance.visible = false
@@ -652,13 +738,15 @@ func _die() -> void:
 func _process_combat(delta: float) -> void:
 	if not is_instance_valid(current_target):
 		current_target = null
-		state = State.IDLE
+		_is_in_melee = false
+		_pop_state()  # Resume previous activity (patrol/guard)
 		return
 
 	# Check if target is dead
 	if current_target.has_method("get") and current_target.get("state") == State.DEAD:
 		current_target = null
-		state = State.IDLE
+		_is_in_melee = false
+		_pop_state()  # Resume previous activity (patrol/guard)
 		return
 
 	# Check range
@@ -667,10 +755,11 @@ func _process_combat(delta: float) -> void:
 
 	if distance > attack_range:
 		# Move closer
+		_is_in_melee = false
 		move_to(current_target.global_position)
 		return
 
-	# Stop moving to fire
+	# Stop moving to fire/melee
 	has_move_order = false
 	velocity = Vector3.ZERO
 
@@ -679,44 +768,185 @@ func _process_combat(delta: float) -> void:
 	var target_rotation: float = atan2(direction.x, direction.z)
 	rotation.y = lerp_angle(rotation.y, target_rotation, delta * 5.0)
 
-	# Fire if cooldown is ready and not pinned
-	if attack_cooldown <= 0.0 and current_ammo > 0 and can_attack_while_suppressed():
-		_fire_at_target()
+	# Check for melee range - close combat takes priority
+	if distance <= MELEE_RANGE:
+		_process_melee_combat(delta)
+		return
+
+	# Ranged combat - Fire if any soldier's cooldown is ready and not pinned
+	_is_in_melee = false
+	if current_ammo > 0 and can_attack_while_suppressed():
+		# For per-soldier system, check if ANY soldier can fire
+		if _soldier_weapon_cooldowns.size() > 0:
+			for cooldown in _soldier_weapon_cooldowns:
+				if cooldown <= 0.0:
+					_fire_at_target()
+					break
+		# Legacy system - single cooldown
+		elif attack_cooldown <= 0.0:
+			_fire_at_target()
 
 
-## Fire at the current target
+## Fire at the current target using per-soldier weapons (CoH/Warno style)
+## Each soldier fires independently based on their own weapon and cooldown
 func _fire_at_target() -> void:
 	if not current_target:
 		return
 
-	# Select best weapon for target (Phase 4.2 - weapon selection)
+	# If per-soldier system is set up, use it
+	if _soldier_weapons.size() > 0:
+		_fire_per_soldier()
+		return
+
+	# Fallback: Legacy single-weapon firing
 	var weapon_to_use: String = primary_weapon
 	if current_target is Node3D:
 		weapon_to_use = select_weapon_for_target(current_target as Node3D)
 
-	# Use CombatManager to fire
+	var fired: bool = false
 	if CombatManager:
-		CombatManager.fire_weapon(self, current_target, weapon_to_use)
+		fired = CombatManager.fire_weapon(self, current_target, weapon_to_use)
 
-	# Trigger fire recoil animation
+	if not fired:
+		return
+
 	if _animator:
 		_animator.trigger_fire_recoil()
 
-	# Consume ammo
-	current_ammo -= 1
-
-	# Auto-reload when magazine empty
 	if current_ammo <= 0:
-		if not reload():
-			# Can't reload - stop firing (no supply or no firebase)
-			return
+		out_of_ammo.emit()
+		return
 
-	# Set cooldown based on weapon used
 	var weapon: RefCounted = VietnamWeaponDataScript.get_weapon(weapon_to_use)
 	if weapon:
 		attack_cooldown = 60.0 / weapon.rate_of_fire
 	else:
 		attack_cooldown = 1.0
+
+
+## Fire weapons per-soldier with individual cooldowns and weapons
+## CoH/Warno style - M60 gunner fires slower but harder, riflemen fire faster
+func _fire_per_soldier() -> void:
+	if not current_target or not CombatManager:
+		return
+
+	var any_fired: bool = false
+	var soldiers_with_ammo: int = 0
+
+	for i in _soldier_weapons.size():
+		var soldier_data: Dictionary = _soldier_weapons[i]
+
+		# Skip dead soldiers
+		if not soldier_data.get("is_alive", true):
+			continue
+
+		# Check if this soldier's cooldown is ready
+		if _soldier_weapon_cooldowns[i] > 0.0:
+			continue
+
+		# Check ammo (shared squad pool for now - could make per-soldier later)
+		var weapon_id: String = soldier_data.get("weapon_id", primary_weapon)
+		var weapon: RefCounted = VietnamWeaponDataScript.get_weapon(weapon_id)
+		if not weapon:
+			continue
+
+		# Get ammo cost for this weapon
+		var ammo_cost: int = CombatManager.get_ammo_cost(weapon_id)
+		if current_ammo < ammo_cost:
+			continue
+
+		soldiers_with_ammo += 1
+
+		# Fire the weapon through CombatManager
+		# Note: CombatManager.fire_weapon handles ammo consumption via consume_ammo()
+		var fired: bool = CombatManager.fire_weapon(self, current_target, weapon_id)
+
+		if fired:
+			any_fired = true
+			# Ammo already consumed by CombatManager.consume_ammo()
+
+			# Set this soldier's cooldown based on their weapon's rate of fire
+			# M60 at 550 RPM = 0.109s between shots
+			# M16 at 700 RPM = 0.086s between shots
+			_soldier_weapon_cooldowns[i] = 60.0 / weapon.rate_of_fire
+
+	# Trigger animation if anyone fired
+	if any_fired and _animator:
+		_animator.trigger_fire_recoil()
+
+	# Check for ammo depletion
+	if current_ammo <= 0:
+		out_of_ammo.emit()
+
+
+# =============================================================================
+# MELEE COMBAT (Simplified Vietnam-era bayonet/hand-to-hand)
+# =============================================================================
+
+## Process melee combat when in bayonet range
+func _process_melee_combat(delta: float) -> void:
+	if not current_target or not is_instance_valid(current_target):
+		_is_in_melee = false
+		return
+
+	# Check if we can melee this target (infantry can't melee vehicles to death)
+	if not can_melee_target(current_target):
+		_is_in_melee = false
+		# Back away from vehicle we can't melee - disengage
+		if current_target is Node3D:
+			var away_dir: Vector3 = (global_position - current_target.global_position).normalized()
+			move_to(global_position + away_dir * 10.0)
+		return
+
+	_is_in_melee = true
+
+	# Melee tick timer - resolve combat twice per second
+	_melee_tick_timer -= delta
+	if _melee_tick_timer <= 0.0:
+		_melee_tick_timer = MELEE_TICK_RATE
+
+		# Apply melee damage to target
+		if current_target.has_method("take_damage"):
+			current_target.take_damage(MELEE_DAMAGE_PER_TICK, self)
+			BattleSignals.melee_attack.emit(self, current_target, MELEE_DAMAGE_PER_TICK)
+
+		# Bidirectional melee - target fights back (if they can)
+		if current_target.has_method("can_melee_target"):
+			if current_target.can_melee_target(self):
+				take_damage(MELEE_DAMAGE_PER_TICK, current_target)
+		elif current_target.has_method("take_damage"):
+			# Target doesn't have melee check, assume they can fight back
+			take_damage(MELEE_DAMAGE_PER_TICK, current_target)
+
+
+## Check if this unit can melee the given target
+## Infantry cannot melee vehicles to death - use AT weapons instead
+func can_melee_target(target: Node) -> bool:
+	if not target:
+		return false
+
+	# Check if target is a vehicle
+	var target_is_vehicle: bool = false
+	if target.has_method("get") and target.get("data"):
+		var target_data: Resource = target.get("data")
+		if target_data and "is_vehicle" in target_data:
+			target_is_vehicle = target_data.is_vehicle
+
+	# Check if we are a vehicle
+	var self_is_vehicle: bool = data.is_vehicle if data else false
+
+	# Infantry can't melee vehicles to death (makes tactical sense)
+	if not self_is_vehicle and target_is_vehicle:
+		return false
+
+	# Vehicles can run over infantry
+	# Infantry can melee infantry
+	return true
+
+
+## Check if this unit is currently in melee combat
+func is_in_melee_combat() -> bool:
+	return _is_in_melee and state == State.COMBAT
 
 
 ## Set attack target and enter combat
@@ -727,15 +957,135 @@ func attack(target: Node) -> void:
 	# Cancel cover seeking when given direct attack order
 	cancel_cover_seeking()
 
+	# Push current state before entering combat (for resume after combat ends)
+	if state != State.COMBAT:
+		_push_state()
+
 	current_target = target
 	state = State.COMBAT
 
 
-## Stop attacking
+## Stop attacking - pops state stack to resume previous activity
 func stop_attack() -> void:
 	current_target = null
 	if state == State.COMBAT:
-		state = State.IDLE
+		# Pop to previous state (resumes patrol/guard if active)
+		_pop_state()
+	# Also stop suppressive fire if active
+	_cancel_suppressive_fire()
+
+
+# =============================================================================
+# SUPPRESSIVE FIRE / OVERWATCH
+# =============================================================================
+
+## Active suppression zone (for suppressive fire orders)
+var _suppression_zone: Area3D = null  # SuppressionZone instance
+var _suppress_target: Vector3 = Vector3.ZERO
+var _is_suppressing: bool = false
+
+
+## Fix 1: Get weapon-category-scaled suppression ammo cost (was flat 10 for all weapons)
+func _get_suppress_ammo_cost() -> float:
+	if not data or not data.primary_weapon:
+		return 3.0
+	var weapon := VietnamWeaponDataScript.get_weapon(data.primary_weapon)
+	if not weapon:
+		return 3.0
+	match weapon.category:
+		VietnamWeaponDataScript.WeaponCategory.RIFLE:
+			return 2.0
+		VietnamWeaponDataScript.WeaponCategory.MACHINE_GUN:
+			return 6.0
+		VietnamWeaponDataScript.WeaponCategory.SMG:
+			return 4.0
+		VietnamWeaponDataScript.WeaponCategory.VEHICLE_MG:
+			return 8.0
+		_:
+			return 3.0
+
+
+## Order squad to lay suppressive fire on an area
+## MGs and automatic weapons are most effective
+func suppress_area(target_pos: Vector3) -> void:
+	if state == State.DEAD:
+		return
+
+	# Need ammo to suppress
+	if current_ammo <= 0:
+		return
+
+	# Cancel other orders
+	stop_attack()
+	cancel_cover_seeking()
+
+	_suppress_target = target_pos
+	_is_suppressing = true
+	state = State.COMBAT  # Considered combat state
+
+	# Get weapon suppression radius (MGs have larger beaten zones)
+	var weapon := VietnamWeaponDataScript.get_weapon(primary_weapon)
+	var suppress_radius: float = 10.0  # Default
+	var suppress_sps: float = 15.0  # Suppression per second
+
+	if weapon:
+		# MGs and automatic weapons have better suppression
+		if weapon.category == VietnamWeaponDataScript.WeaponCategory.MACHINE_GUN:
+			suppress_radius = 18.0
+			suppress_sps = 30.0
+		elif weapon.category == VietnamWeaponDataScript.WeaponCategory.VEHICLE_MG:
+			suppress_radius = 20.0
+			suppress_sps = 35.0
+
+	# Create or refresh suppression zone
+	_suppression_zone = SuppressionZoneScript.create_or_refresh(
+		_suppression_zone,
+		get_tree().root,
+		target_pos,
+		suppress_radius,
+		3.0,  # 3 second duration per refresh
+		suppress_sps
+	)
+
+
+## Process suppressive fire each frame
+func _process_suppressive_fire(delta: float) -> void:
+	if not _is_suppressing or state == State.DEAD:
+		return
+
+	# Fix 1: Consume ammo based on weapon category (was flat SUPPRESS_AMMO_PER_SECOND = 10)
+	var ammo_cost: int = ceili(_get_suppress_ammo_cost() * delta)
+	current_ammo = maxi(current_ammo - ammo_cost, 0)
+
+	# Stop if out of ammo
+	if current_ammo <= 0:
+		_cancel_suppressive_fire()
+		out_of_ammo.emit()
+		return
+
+	# Refresh suppression zone to keep it active
+	if _suppression_zone and is_instance_valid(_suppression_zone):
+		_suppression_zone.refresh()
+
+	# Face toward suppression target
+	var look_dir := (_suppress_target - global_position).normalized()
+	look_dir.y = 0
+	if look_dir.length_squared() > 0.01:
+		rotation.y = atan2(look_dir.x, look_dir.z)
+
+
+## Cancel suppressive fire
+func _cancel_suppressive_fire() -> void:
+	_is_suppressing = false
+	_suppress_target = Vector3.ZERO
+	if _suppression_zone and is_instance_valid(_suppression_zone):
+		_suppression_zone.cancel()
+		_suppression_zone = null
+
+
+## Check if currently suppressing an area
+func is_suppressing() -> bool:
+	return _is_suppressing
 
 
 # =============================================================================
@@ -919,13 +1269,14 @@ func _update_state_from_suppression() -> void:
 	if suppression_state == GameEnums.SuppressionState.SUPPRESSED or \
 	   suppression_state == GameEnums.SuppressionState.PINNED:
 		if state != State.SUPPRESSED:
+			_push_state()  # Save current state to resume after suppression
 			state = State.SUPPRESSED
 		# Auto-prone when heavily suppressed
 		if not is_prone and suppression_level >= 0.5:
 			is_prone = true
 	elif state == State.SUPPRESSED:
-		# Recovered from suppression, return to IDLE
-		state = State.IDLE
+		# Recovered from suppression - pop to resume previous activity
+		_pop_state()
 		# Stand up when recovered (below CAUTIOUS threshold)
 		if is_prone and suppression_level < 0.3:
 			is_prone = false
@@ -1789,6 +2140,49 @@ func _setup_morale() -> void:
 	add_child(_morale_indicator)
 
 
+## Set up Squad Commander AI for tactical decision-making (non-player units)
+func _setup_squad_commander_ai() -> void:
+	if not data:
+		return
+
+	# Create the SquadCommanderAI instance
+	squad_commander_ai = SquadCommanderAIScript.new(self)
+
+	# Register with AITickManager for staggered processing
+	var tick_mgr := get_node_or_null("/root/AITickManager")
+	if tick_mgr:
+		tick_mgr.register_commander(squad_commander_ai)
+
+
+## Get the Squad Commander AI instance (for AITickManager registration)
+func get_commander_ai() -> RefCounted:
+	return squad_commander_ai
+
+
+## Check if squad is dead (helper for SquadCommanderAI)
+func is_dead() -> bool:
+	return state == State.DEAD
+
+
+## Get current suppression ratio (0.0 to 1.0)
+func get_suppression_ratio() -> float:
+	return suppression_level
+
+
+## Get current health ratio (0.0 to 1.0)
+func get_health_ratio() -> float:
+	if max_health <= 0.0:
+		return 0.0
+	return current_health / max_health
+
+
+## Get current ammo ratio (0.0 to 1.0)
+func get_ammo_ratio() -> float:
+	if max_ammo <= 0:
+		return 0.0
+	return float(current_ammo) / float(max_ammo)
+
+
 ## Process morale each frame
 func _process_morale(delta: float) -> void:
 	if not _morale or state == State.DEAD:
@@ -2114,6 +2508,80 @@ func _get_weapon_for_faction() -> String:
 			return "m16"
 
 
+## Setup per-soldier weapon assignments based on unit type
+## Per GAME_BIBLE: Rifle Squad = 10 soldiers with M16+M60+M79 mix
+## CoH/Warno style - each soldier has their own weapon and fire rate
+func _setup_soldier_weapons() -> void:
+	_soldier_weapons.clear()
+	_soldier_weapon_cooldowns.clear()
+
+	if not data:
+		return
+
+	var squad_size: int = data.squad_size if data else 10
+	var faction: int = data.faction if data else GameEnums.Faction.US_ARMY
+	var unit_type_val: int = data.unit_type if data else GameEnums.UnitType.RIFLE_PLATOON
+
+	# Default weapon for this faction
+	var default_weapon: String = _get_weapon_for_faction()
+
+	# Assign weapons based on unit type composition
+	# Per GAME_BIBLE line 390: Rifle Squad = 10 soldiers, M16+M60+M79
+	match unit_type_val:
+		GameEnums.UnitType.RIFLE_PLATOON:
+			# Standard rifle squad: 8x M16, 1x M60, 1x M79
+			for i in squad_size:
+				var weapon_id: String
+				if i == 0:
+					# Squad leader or MG gunner gets M60
+					weapon_id = "m60" if faction in [GameEnums.Faction.US_ARMY, GameEnums.Faction.ARVN] else "rpd"
+				elif i == 1:
+					# Grenadier gets M79 (US) or RPG (VC/NVA)
+					weapon_id = "m79" if faction in [GameEnums.Faction.US_ARMY, GameEnums.Faction.ARVN] else "ak47"
+				else:
+					# Rest carry rifles
+					weapon_id = default_weapon
+				_soldier_weapons.append({"weapon_id": weapon_id, "is_alive": true})
+				_soldier_weapon_cooldowns.append(0.0)
+
+		GameEnums.UnitType.WEAPONS_SQUAD:
+			# Heavy weapons squad: all M60s (US) or RPD/DSHK (VC/NVA)
+			var heavy_weapon: String = "m60" if faction in [GameEnums.Faction.US_ARMY, GameEnums.Faction.ARVN] else "rpd"
+			for i in squad_size:
+				_soldier_weapons.append({"weapon_id": heavy_weapon, "is_alive": true})
+				_soldier_weapon_cooldowns.append(0.0)
+
+		GameEnums.UnitType.NVA_HEAVY_WEAPONS:
+			# NVA heavy weapons: DShK and mortars
+			for i in squad_size:
+				var weapon_id: String = "dshk" if i < squad_size / 2 else "mortar_82mm"
+				_soldier_weapons.append({"weapon_id": weapon_id, "is_alive": true})
+				_soldier_weapon_cooldowns.append(0.0)
+
+		_:
+			# Default: everyone gets the standard weapon
+			for i in squad_size:
+				_soldier_weapons.append({"weapon_id": default_weapon, "is_alive": true})
+				_soldier_weapon_cooldowns.append(0.0)
+
+	# Calculate total ammo based on all weapons in squad
+	_recalculate_squad_ammo()
+
+
+## Recalculate total squad ammo based on all soldier weapons
+func _recalculate_squad_ammo() -> void:
+	var total_ammo: int = 0
+	for soldier_weapon in _soldier_weapons:
+		var weapon_id: String = soldier_weapon.get("weapon_id", "m16")
+		var weapon: RefCounted = VietnamWeaponDataScript.get_weapon(weapon_id)
+		if weapon:
+			# Each soldier carries their weapon's combat load
+			total_ammo += weapon.magazine_size * MAGAZINES_CARRIED
+
+	max_ammo = total_ammo
+	current_ammo = max_ammo
+
+
 ## Set selection visual state
 func set_selected_visual(selected: bool) -> void:
 	_is_selected = selected
@@ -2285,45 +2753,8 @@ func _create_visibility_indicators() -> void:
 	_status_indicator.visible = false
 	add_child(_status_indicator)
 
-	# Create outline mesh - a slightly larger version of the unit mesh
-	_outline_mesh = MeshInstance3D.new()
-
-	# Use a simple cylinder for the outline (matches placeholder)
-	var is_vehicle: bool = data.is_vehicle if data else false
-	if is_vehicle:
-		var box := BoxMesh.new()
-		box.size = Vector3(2.2, 1.7, 4.2)  # Slightly larger than unit
-		_outline_mesh.mesh = box
-		_outline_mesh.position.y = 0.75
-	else:
-		var cylinder := CylinderMesh.new()
-		cylinder.top_radius = 0.6
-		cylinder.bottom_radius = 0.6
-		cylinder.height = 2.0
-		_outline_mesh.mesh = cylinder
-		_outline_mesh.position.y = 0.9
-
-	# Load and apply outline shader
-	var outline_shader: Shader = load("res://battle_system/shaders/unit_outline.gdshader")
-	if outline_shader:
-		var outline_mat := ShaderMaterial.new()
-		outline_mat.shader = outline_shader
-		if is_player_controlled:
-			outline_mat.set_shader_parameter("outline_color", Color(0.2, 0.5, 1.0, 1.0))  # Blue
-		else:
-			outline_mat.set_shader_parameter("outline_color", Color(1.0, 0.2, 0.2, 1.0))  # Red
-		outline_mat.set_shader_parameter("outline_width", 0.05)
-		_outline_mesh.material_override = outline_mat
-	else:
-		# Fallback to simple colored mesh if shader not found
-		var fallback_mat := StandardMaterial3D.new()
-		fallback_mat.albedo_color = Color(0.2, 0.5, 1.0, 0.5) if is_player_controlled else Color(1.0, 0.2, 0.2, 0.5)
-		fallback_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		_outline_mesh.material_override = fallback_mat
-
-	_outline_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-
-	add_child(_outline_mesh)
+	# Model-based outline is created after model loads via _create_model_outline()
+	# This creates a better silhouette effect that follows the actual 3D model
 
 
 ## Try to load the appropriate 3D model for this unit
@@ -2394,6 +2825,9 @@ func _spawn_single_model(model_scene: PackedScene, model_path: String) -> bool:
 	_mesh_instance = _find_mesh_instance(model_instance)
 	_setup_animator(model_instance)
 
+	# Create model-based outline for faction visibility
+	_create_model_outline(model_instance)
+
 	print("[Squad] Loaded single model: ", model_path)
 	return true
 
@@ -2440,6 +2874,10 @@ func _spawn_soldier_formation(model_scene: PackedScene, count: int, model_path: 
 		_mesh_instance = _find_mesh_instance(_soldier_nodes[0])
 		_model_node = _formation_container
 
+		# Create model-based outline using formation container
+		# This creates outlines for all soldiers in the formation
+		_create_model_outline(_formation_container)
+
 	# Set up animator for the formation
 	_setup_animator(_formation_container)
 
@@ -2480,7 +2918,84 @@ func _calculate_line_formation(count: int) -> Array[Vector3]:
 	return positions
 
 
+# =============================================================================
+# MODEL-BASED OUTLINE SYSTEM
+# =============================================================================
+
+## Create outline mesh by duplicating the loaded model
+## This creates a silhouette effect that follows the actual 3D model shape
+func _create_model_outline(source_model: Node3D) -> void:
+	if not source_model:
+		return
+
+	# Clean up existing outline if any
+	if _outline_mesh:
+		_outline_mesh.queue_free()
+		_outline_mesh = null
+
+	# Duplicate the model for outline rendering
+	var outline_duplicate: Node3D = source_model.duplicate() as Node3D
+	if not outline_duplicate:
+		return
+
+	outline_duplicate.name = "ModelOutline"
+
+	# Apply outline shader to ALL mesh instances in the duplicate
+	_apply_outline_shader_recursive(outline_duplicate)
+
+	# Add as child and position at origin (same as model)
+	add_child(outline_duplicate)
+
+	# Move outline BEFORE main model in tree so it renders behind
+	# This ensures the outline appears as a silhouette behind the unit
+	var model_idx: int = source_model.get_index()
+	if model_idx > 0:
+		move_child(outline_duplicate, model_idx)
+
+	# Store reference (using Node3D since it's the duplicate root)
+	# We'll store a dummy MeshInstance3D reference for compatibility
+	var first_mesh: MeshInstance3D = _find_mesh_instance(outline_duplicate)
+	if first_mesh:
+		_outline_mesh = first_mesh
+
+
+## Apply outline shader to all MeshInstance3D nodes recursively
+func _apply_outline_shader_recursive(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mesh_inst: MeshInstance3D = node as MeshInstance3D
+		var outline_shader: Shader = load("res://battle_system/shaders/unit_outline.gdshader")
+
+		if outline_shader:
+			var outline_mat := ShaderMaterial.new()
+			outline_mat.shader = outline_shader
+
+			# Set color based on faction (blue for player, red for enemy)
+			if is_player_controlled:
+				outline_mat.set_shader_parameter("outline_color", Color(0.2, 0.6, 1.0, 1.0))
+			else:
+				outline_mat.set_shader_parameter("outline_color", Color(1.0, 0.2, 0.2, 1.0))
+
+			outline_mat.set_shader_parameter("outline_width", 0.03)
+			mesh_inst.material_override = outline_mat
+		else:
+			# Fallback to simple colored mesh if shader not found
+			var fallback_mat := StandardMaterial3D.new()
+			if is_player_controlled:
+				fallback_mat.albedo_color = Color(0.2, 0.6, 1.0, 0.5)
+			else:
+				fallback_mat.albedo_color = Color(1.0, 0.2, 0.2, 0.5)
+			fallback_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mesh_inst.material_override = fallback_mat
+
+		mesh_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	# Recurse to children
+	for child in node.get_children():
+		_apply_outline_shader_recursive(child)
+
+
 ## Hide soldiers when taking casualties (from back of formation)
+## Also marks soldier weapons as inactive so they stop firing
 func apply_casualty_visuals(remaining_soldiers: int) -> void:
 	remaining_soldiers = clampi(remaining_soldiers, 0, _soldier_nodes.size())
 
@@ -2489,6 +3004,10 @@ func apply_casualty_visuals(remaining_soldiers: int) -> void:
 		var soldier: Node3D = _soldier_nodes[i]
 		if is_instance_valid(soldier):
 			soldier.visible = i < remaining_soldiers
+
+		# Mark soldier weapons as alive/dead to match visibility
+		if i < _soldier_weapons.size():
+			_soldier_weapons[i]["is_alive"] = i < remaining_soldiers
 
 	_alive_soldier_count = remaining_soldiers
 
@@ -2626,6 +3145,9 @@ func _create_placeholder_mesh() -> void:
 
 	add_child(_mesh_instance)
 
+	# Create outline for placeholder mesh too
+	_create_model_outline(_mesh_instance)
+
 
 func _setup_collision() -> void:
 	# Movement uses direct position updates + terrain snapping (slope physics nulled),
@@ -2707,14 +3229,19 @@ func _apply_data() -> void:
 		if is_in_group("player_units"):
 			remove_from_group("player_units")
 
-	# Set weapon based on faction
+	# Set weapon based on faction (legacy - primary weapon for fallback)
 	primary_weapon = _get_weapon_for_faction()
 
-	# Initialize ammo
-	var weapon: RefCounted = VietnamWeaponDataScript.get_weapon(primary_weapon)
-	if weapon:
-		current_ammo = weapon.magazine_size
-		max_ammo = weapon.magazine_size
+	# Setup per-soldier weapon assignments (CoH/Warno style)
+	# This also calculates total squad ammo based on all weapons
+	_setup_soldier_weapons()
+
+	# Fallback: if per-soldier system didn't set ammo, use old calculation
+	if _soldier_weapons.is_empty():
+		var weapon: RefCounted = VietnamWeaponDataScript.get_weapon(primary_weapon)
+		if weapon:
+			max_ammo = weapon.magazine_size * MAGAZINES_CARRIED
+			current_ammo = max_ammo
 
 	# Initialize water from squad data
 	if "max_water" in data:
@@ -2723,6 +3250,42 @@ func _apply_data() -> void:
 	else:
 		max_water = 100
 		current_water = 100
+
+	# Update faction visual colors now that is_player_controlled is set correctly
+	_update_faction_visual_colors()
+
+
+## Update visual indicator colors based on faction (blue for player, red for enemy)
+## Called after is_player_controlled is set to ensure correct colors
+func _update_faction_visual_colors() -> void:
+	var player_color := Color(0.2, 0.6, 1.0, 1.0)  # Bright blue
+	var enemy_color := Color(1.0, 0.3, 0.2, 1.0)   # Red
+	var target_color: Color = player_color if is_player_controlled else enemy_color
+
+	# Update overhead marker color
+	if _overhead_marker and _overhead_marker.material_override:
+		var mat: StandardMaterial3D = _overhead_marker.material_override as StandardMaterial3D
+		if mat:
+			mat.albedo_color = target_color
+
+	# Update model outline colors (recursively find all outline meshes)
+	if _outline_mesh:
+		_update_outline_colors_recursive(_outline_mesh.get_parent(), target_color)
+
+
+## Recursively update outline shader colors for all mesh instances
+func _update_outline_colors_recursive(node: Node, color: Color) -> void:
+	if node is MeshInstance3D:
+		var mesh_inst: MeshInstance3D = node as MeshInstance3D
+		if mesh_inst.material_override is ShaderMaterial:
+			var shader_mat: ShaderMaterial = mesh_inst.material_override as ShaderMaterial
+			shader_mat.set_shader_parameter("outline_color", color)
+		elif mesh_inst.material_override is StandardMaterial3D:
+			var std_mat: StandardMaterial3D = mesh_inst.material_override as StandardMaterial3D
+			std_mat.albedo_color = Color(color.r, color.g, color.b, 0.5)
+
+	for child in node.get_children():
+		_update_outline_colors_recursive(child, color)
 
 
 ## Set up procedural animation system

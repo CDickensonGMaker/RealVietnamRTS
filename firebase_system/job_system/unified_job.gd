@@ -110,9 +110,9 @@ signal prerequisite_completed(job: UnifiedJob, prereq: UnifiedJob)
 static var _next_job_id: int = 1
 
 
-static func create(type: Type, center_world: Vector3, size_world: Vector2 = Vector2(4, 4)) -> UnifiedJob:
+static func create(type: Type, center_world: Vector3, size_world: Vector2 = Vector2(4, 4)) -> RefCounted:
 	"""Factory method to create a job with proper grid alignment"""
-	var job := UnifiedJob.new()
+	var job := new()
 	job.job_id = _next_job_id
 	_next_job_id += 1
 	job.job_type = type
@@ -639,7 +639,7 @@ static func get_state_name(s: State) -> String:
 func _to_string() -> String:
 	return "UnifiedJob #%d (%s) [%s] %.0f%%" % [
 		job_id,
-		UnifiedJob.get_type_name(job_type),
-		UnifiedJob.get_state_name(state),
+		get_type_name(job_type),
+		get_state_name(state),
 		get_progress() * 100
 	]

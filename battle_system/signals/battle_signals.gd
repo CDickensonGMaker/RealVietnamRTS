@@ -46,6 +46,8 @@ signal firebase_under_attack(firebase: Node3D, attacker: Node3D)
 signal construction_started(zone: Node3D, building_type: int)
 signal construction_complete(building: Node3D)
 signal terrain_cleared(position: Vector3, radius: float)
+signal building_selected(building: Node3D)
+signal building_destroyed(zone: Node3D, building_type: int)
 
 # =============================================================================
 # SUPPLY SIGNALS (Phase 3)

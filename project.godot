@@ -16,7 +16,7 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 config/name="RealVietnamRTS"
 config/description="Logistics-first Vietnam War RTS"
-run/main_scene="res://scenes/main.tscn"
+run/main_scene="res://scenes/test_combined.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
@@ -49,12 +49,17 @@ TestDaemon="*res://test_daemon/daemon_autoload.gd"
 SupplyManager="*res://reinforcement_system/supply_manager.gd"
 RoadNetwork="*res://terrain/systems/road_network.gd"
 SupplyChainManager="*res://logistics_system/supply_chain_manager.gd"
+AITickManager="*res://battle_system/ai/ai_tick_manager.gd"
 
 [display]
 
 window/size/viewport_width=1920
 window/size/viewport_height=1080
 window/size/mode=2
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/building_viewer/plugin.cfg", "res://addons/model_viewer/plugin.cfg")
 
 [input]
 

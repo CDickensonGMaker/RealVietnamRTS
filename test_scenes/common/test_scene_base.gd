@@ -495,6 +495,15 @@ static func _create_hootch(pos: Vector3, base_y: float) -> StaticBody3D:
 	return hootch
 
 
+## Spawn a cover object at position (sandbag wall)
+static func spawn_cover_at(scene: Node3D, pos: Vector3) -> StaticBody3D:
+	var terrain := scene.get_node_or_null("/root/TerrainIntegration")
+	var base_y: float = 0.0
+	if terrain and terrain.has_method("get_height_at"):
+		base_y = terrain.get_height_at(pos)
+	return _create_sandbag_wall(pos, base_y)
+
+
 ## Create a HUD overlay with a label that scene can update.
 static func make_hud(scene: Node3D) -> Label:
 	var canvas := CanvasLayer.new()

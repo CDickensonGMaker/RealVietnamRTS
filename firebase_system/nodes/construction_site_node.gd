@@ -68,6 +68,11 @@ func _ready() -> void:
 	# Create visuals
 	_setup_visuals()
 
+	# Apply building rotation to the entire construction site
+	# This ensures the preview footprint matches the final building orientation
+	if building_rotation != 0.0:
+		rotation.y = building_rotation
+
 	# Snap to terrain
 	_snap_to_terrain()
 
@@ -130,14 +135,36 @@ func _setup_visuals() -> void:
 
 
 func _snap_to_terrain() -> void:
+	"""Snap construction site to terrain, sampling multiple points to prevent clipping"""
 	var terrain: Node = get_node_or_null("/root/UnifiedTerrain")
-	if terrain and terrain.has_method("get_height_at"):
-		position.y = terrain.get_height_at(global_position)
+	if not terrain or not terrain.has_method("get_height_at"):
+		terrain = get_node_or_null("/root/TerrainIntegration")
+
+	if not terrain or not terrain.has_method("get_height_at"):
 		return
 
-	var terrain_intg: Node = get_node_or_null("/root/TerrainIntegration")
-	if terrain_intg and terrain_intg.has_method("get_height_at"):
-		position.y = terrain_intg.get_height_at(global_position)
+	# Sample 5 points: center + 4 corners
+	var hx: float = footprint_size.x * 0.5
+	var hz: float = footprint_size.y * 0.5
+	var center: Vector3 = global_position
+
+	var sample_points: Array[Vector2] = [
+		Vector2(0, 0),  # Center
+		Vector2(-hx, -hz),  # Bottom-left
+		Vector2(hx, -hz),   # Bottom-right
+		Vector2(hx, hz),    # Top-right
+		Vector2(-hx, hz),   # Top-left
+	]
+
+	var max_height: float = -1000.0
+	for offset in sample_points:
+		var sample_pos := Vector3(center.x + offset.x, 0, center.z + offset.y)
+		var height: float = terrain.get_height_at(sample_pos)
+		if height > max_height:
+			max_height = height
+
+	# Add small offset to ensure building is above terrain
+	position.y = max_height + 0.05
 
 
 func _setup_progress_bar() -> void:
@@ -485,8 +512,8 @@ func _create_outline_mesh() -> ArrayMesh:
 
 
 ## Factory: Create a construction site at a position
-static func create(world_position: Vector3, type: int, rotation: float = 0.0, size: Vector2 = Vector2(4.0, 4.0)) -> ConstructionSiteNode:
-	var site := ConstructionSiteNode.new()
+static func create(world_position: Vector3, type: int, rotation: float = 0.0, size: Vector2 = Vector2(4.0, 4.0)) -> Node:
+	var site := new()
 	site.position = world_position
 	site.building_type = type
 	site.building_rotation = rotation

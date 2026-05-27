@@ -19,6 +19,85 @@
 
 ---
 
+## Godot-First Development Philosophy
+
+**PREFER GODOT EDITOR OVER SCRIPTS.** Use the engine's visual tools rather than writing GDScript for everything.
+
+### Scene Files Over Code Instantiation
+```gdscript
+# BAD - Creating nodes in code
+var bunker := StaticBody3D.new()
+bunker.add_child(model)
+bunker.add_child(collision)
+get_tree().current_scene.add_child(bunker)
+
+# GOOD - Use pre-made scene files
+var bunker := preload("res://game/scenes/buildings/bunker.tscn").instantiate()
+get_tree().current_scene.add_child(bunker)
+```
+
+### @export Variables Over Hardcoded Values
+```gdscript
+# BAD - Magic numbers in code
+const INFLUENCE_RADIUS := 168.0
+const SUPPLY_COST := 50
+
+# GOOD - Configurable in Inspector
+@export var influence_radius: float = 168.0
+@export var supply_cost: int = 50
+```
+
+### Node Composition Over Script Inheritance
+```gdscript
+# BAD - Deep inheritance chains
+class_name AdvancedBunker extends ReinforcedBunker extends Bunker extends BaseStructure
+
+# GOOD - Compose with child nodes
+# Bunker.tscn contains:
+#   - StaticBody3D (root with bunker.gd)
+#   - Model (Node3D)
+#   - CollisionShape3D
+#   - GarrisonSlot (Marker3D)
+#   - WeaponMount (Node3D with weapon_mount.gd)
+```
+
+### Resources (.tres) Over Script Configuration
+```gdscript
+# BAD - Huge match statements for building data
+match building_type:
+    BuildingType.TOC: return {"cost": 80, "radius": 168}
+    BuildingType.BUNKER: return {"cost": 40, "radius": 0}
+
+# GOOD - Resource files per building type
+# res://data/buildings/toc.tres
+# res://data/buildings/bunker.tres
+var data: BuildingData = load("res://data/buildings/%s.tres" % building_name)
+```
+
+### When to Use Scripts
+- **State machines** - Combat states, AI behavior
+- **Complex calculations** - Pathfinding, damage formulas
+- **System coordination** - Signals, autoloads
+- **Runtime generation** - Procedural terrain, spawning waves
+
+### When to Use Godot Editor
+- **Placing objects** - Buildings, units, props in levels
+- **Configuring values** - Stats, costs, radii via @export
+- **Defining data** - Resources (.tres) for items, units, buildings
+- **UI layout** - Control nodes, themes, anchors
+- **Animation** - AnimationPlayer, tweens, state machines
+
+### Building Scene Locations
+All placeable buildings live in `game/scenes/buildings/`:
+- `toc.tscn` - Tactical Operations Center (HQ)
+- `bunker.tscn`, `sandbag_bunker.tscn`, `conex_bunker.tscn`
+- `mg_nest.tscn`, `mortar_pit.tscn`, `observation_tower.tscn`
+- etc.
+
+Use `PlacedBuilding` script for scene-placed buildings that auto-register with Firebase system.
+
+---
+
 > **CRITICAL: Read GAME_BIBLE.md before ANY work.** This file is a quick reference; the Bible is authoritative.
 
 ## Game Bible

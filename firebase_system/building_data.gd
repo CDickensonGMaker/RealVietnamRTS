@@ -352,7 +352,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.health = 400.0
 			data.armor = 10.0
 			data.garrison_capacity = 8
-			data.footprint_size = Vector2(4, 4)
+			data.footprint_size = Vector2(5, 5)  # Increased from 4×4 to 5×5 (+25%)
 			data.height = 2.5
 			data.cover_value = 0.8
 			data.auto_attacks = true
@@ -520,8 +520,8 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.supply_cost = 50
 			data.stage_work = [40.0, 50.0, 40.0]
 			data.health = 100.0
-			data.footprint_size = Vector2(8, 8)
-			data.height = 0.2
+			data.footprint_size = Vector2(12, 12)  # Updated to match actual model size
+			data.height = 0.5
 			data.provides_cover = false
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
 
@@ -575,17 +575,16 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.EXPLODED]
 
 		BuildingType.FUEL_DEPOT:
-			data.display_name = "Fuel Depot"
-			data.description = "Vehicle and helicopter fuel storage"
+			data.display_name = "Water Supply Point"
+			data.description = "Water storage and distribution for firebase operations"
 			data.category = BuildingCategory.FIREBASE_SUPPORT
 			data.supply_cost = 40
 			data.stage_work = [35.0, 50.0, 35.0]
 			data.health = 150.0
 			data.footprint_size = Vector2(5, 5)
 			data.height = 3.0
-			data.is_flammable = true
-			data.is_explosive = true
-			data.destruction_states = [DestructionState.INTACT, DestructionState.BURNED, DestructionState.EXPLODED]
+			data.is_water_source = true
+			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
 		BuildingType.FUEL_POINT:
 			data.display_name = "Fuel Point"
@@ -1460,13 +1459,14 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 
 		BuildingType.PONTOON_BRIDGE:
 			data.display_name = "Pontoon Bridge"
-			data.description = "Floating military bridge"
+			data.description = "Floating military bridge - spans rivers and water"
 			data.category = BuildingCategory.INFRASTRUCTURE
 			data.supply_cost = 80
 			data.stage_work = [50.0, 80.0, 50.0]
 			data.health = 200.0
 			data.footprint_size = Vector2(30, 5)
 			data.height = 1.0
+			data.can_place_anywhere = true  # Bridges need to span water, bypass firebase zone
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
 
 		BuildingType.STONE_ARCH_BRIDGE:
@@ -2056,7 +2056,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.footprint_size = Vector2(6, 14)
 			data.height = 3.0
 			data.requires_cleared_terrain = false
-			data.can_place_anywhere = false
+			data.can_place_anywhere = true  # Bridges span water, bypass firebase zone
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
 	return data
@@ -2094,8 +2094,6 @@ static func get_buildings_by_category(category: BuildingCategory) -> Array[Build
 				BuildingType.SANDBAG_LIGHT,
 				BuildingType.SANDBAG_HEAVY,
 				BuildingType.BUNKER,
-				BuildingType.SANDBAG_BUNKER,
-				BuildingType.CONEX_BUNKER,
 				BuildingType.MACHINE_GUN_NEST,
 				BuildingType.MORTAR_PIT,
 				BuildingType.WIRE_OBSTACLE,
@@ -2125,14 +2123,12 @@ static func get_buildings_by_category(category: BuildingCategory) -> Array[Build
 				BuildingType.SHOWER_POINT,
 				BuildingType.OBSERVATION_TOWER,
 				BuildingType.GUARD_TOWER,
-				BuildingType.POWDER_BUNKER,
 			]
 		BuildingCategory.FIREBASE_HEAVY:
 			buildings = [
 				BuildingType.ARTILLERY_PIT,
 				BuildingType.HOWITZER_PIT_105MM,
 				BuildingType.HOWITZER_PIT_155MM,
-				BuildingType.FIRE_DIRECTION_CENTER,
 				BuildingType.TANK_REVETMENT,
 				BuildingType.OPEN_REVETMENT,
 			]
