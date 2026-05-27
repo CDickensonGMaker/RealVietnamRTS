@@ -145,6 +145,23 @@ func _on_supply_delivered(_destination: Node3D, _amount: float) -> void:
 	_update_supply_display()
 
 
+func _on_supply_refunded(amount: float, reason: String) -> void:
+	## Handle supply refund from cancelled construction - show toast and update display
+	_update_supply_display()
+
+	# Show refund toast in supply label
+	if _supply_label:
+		var prev_text: String = _supply_label.text
+		_supply_label.text = "+%d supply refunded (%s cancelled)" % [int(amount), reason]
+		_supply_label.add_theme_color_override("font_color", Color(0.4, 0.8, 0.4))  # Green
+
+		get_tree().create_timer(2.0).timeout.connect(func():
+			if is_instance_valid(_supply_label):
+				_supply_label.text = prev_text
+				_update_supply_display()
+		)
+
+
 ## Track if we're currently in a paint drag operation
 var _paint_dragging: bool = false
 
@@ -182,6 +199,14 @@ func _input(event: InputEvent) -> void:
 	if CursorModeScript.is_paint_mode(_cursor_mode):
 		if event is InputEventMouseButton:
 			var mouse_event := event as InputEventMouseButton
+
+			# Don't consume UI clicks - check if mouse is over any Control
+			if mouse_event.pressed:
+				var mouse_pos: Vector2 = get_viewport().get_mouse_position()
+				var hud_base: Control = _hud_layer.get_child(0) if _hud_layer.get_child_count() > 0 else null
+				if hud_base and _is_mouse_over_ui(hud_base, mouse_pos):
+					return  # Let UI handle the click
+
 			if mouse_event.button_index == MOUSE_BUTTON_LEFT:
 				if mouse_event.pressed:
 					# Start drag - force update for accurate click position
@@ -202,12 +227,19 @@ func _input(event: InputEvent) -> void:
 						get_viewport().set_input_as_handled()
 						return
 
-			# Right-click cancels paint mode
+			# Right-click: commit single-point action OR cancel if dragging
 			if mouse_event.button_index == MOUSE_BUTTON_RIGHT and mouse_event.pressed:
 				if _paint_dragging:
+					# Cancel the drag if we're in the middle of one
 					_targeting_overlay.end_paint_drag()
 					_paint_dragging = false
-				set_cursor_mode(CursorModeScript.Mode.NORMAL)
+					set_cursor_mode(CursorModeScript.Mode.NORMAL)
+				elif CursorModeScript.right_click_commits(_cursor_mode):
+					# Commit single-point action (e.g., 9x9m clearing zone)
+					_commit_current_mode()
+				else:
+					# Just cancel paint mode
+					set_cursor_mode(CursorModeScript.Mode.NORMAL)
 				get_viewport().set_input_as_handled()
 				return
 		# Consume all input while in paint mode to prevent propagation
@@ -370,6 +402,7 @@ func _connect_signals() -> void:
 		BattleSignals.selection_changed.connect(_on_selection_changed)
 		BattleSignals.supply_consumed.connect(_on_supply_consumed)
 		BattleSignals.supply_delivered.connect(_on_supply_delivered)
+		BattleSignals.supply_refunded.connect(_on_supply_refunded)
 
 	# Connect to command panel
 	if _command_panel.has_signal("command_pressed"):
@@ -389,6 +422,25 @@ func _connect_signals() -> void:
 		_placement_controller.placement_committed.connect(_on_placement_committed)
 		_placement_controller.placement_cancelled.connect(_on_placement_cancelled)
 		_placement_controller.validation_changed.connect(_on_placement_validation_changed)
+		_placement_controller.placement_failed.connect(_on_placement_failed)
+
+	# Connect to ConstructionManager for build failure feedback
+	var construction_mgr := get_node_or_null("/root/ConstructionManager")
+	if construction_mgr and construction_mgr.has_signal("construction_failed"):
+		construction_mgr.construction_failed.connect(_on_construction_failed)
+
+
+func _on_construction_failed(_firebase: Node3D, reason: String) -> void:
+	## Flash failure reason in supply label as a toast notification
+	if _supply_label:
+		var prev_text: String = _supply_label.text
+		_supply_label.text = "Build failed: %s" % reason
+		_supply_label.add_theme_color_override("font_color", MilitaryTheme.COL_HEALTH_LOW)
+		# Restore after 3 seconds
+		await get_tree().create_timer(3.0).timeout
+		if is_instance_valid(_supply_label):
+			_supply_label.text = prev_text
+			_update_supply_display()  # Restore proper color
 
 
 func _on_selection_changed(_selected: Array = []) -> void:
@@ -429,6 +481,28 @@ func _on_placement_validation_changed(valid: bool, message: String) -> void:
 	if not valid and message != "":
 		# Could show tooltip or status message here
 		pass
+
+
+func _on_placement_failed(building_type: int, reason: String) -> void:
+	## Show placement failure reason to the player
+	var building_name: String = "Building"
+	var BuildingData := preload("res://firebase_system/building_data.gd")
+	var data = BuildingData.get_building_data(building_type)
+	if data:
+		building_name = data.display_name
+
+	print("[BattleHUD] Placement failed: %s - %s" % [building_name, reason])
+
+	# Show in supply label as toast notification (same style as construction_failed)
+	if _supply_label:
+		var prev_text: String = _supply_label.text
+		_supply_label.text = "Cannot build %s: %s" % [building_name, reason]
+		_supply_label.add_theme_color_override("font_color", MilitaryTheme.COL_HEALTH_LOW)
+		# Restore after 3 seconds
+		await get_tree().create_timer(3.0).timeout
+		if is_instance_valid(_supply_label):
+			_supply_label.text = prev_text
+			_update_supply_display()  # Restore proper color
 
 
 func _on_command_pressed(command_name: String) -> void:

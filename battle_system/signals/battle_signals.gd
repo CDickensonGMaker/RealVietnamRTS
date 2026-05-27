@@ -23,6 +23,7 @@ signal nearby_squad_destroyed(position: Vector3, faction: int)
 # COMBAT SIGNALS (Phase 2)
 # =============================================================================
 signal unit_attacked(attacker: Node3D, target: Node3D, weapon_id: String)
+signal melee_attack(attacker: Node3D, target: Node3D, damage: float)  ## Close combat bayonet/hand-to-hand
 signal unit_suppressed(target: Node3D, amount: float, source: Node3D)
 signal unit_ammo_depleted(unit: Node3D)  ## Emitted when unit runs out of ammo and cannot fire
 signal projectile_impact(position: Vector3, damage_type: int)
@@ -53,6 +54,7 @@ signal convoy_departed(convoy: Node3D)
 signal convoy_arrived(convoy: Node3D, destination: Node3D)
 signal supply_delivered(destination: Node3D, amount: float)
 signal supply_consumed(firebase: Node3D, amount: float, reason: String)  ## Emitted when supply is spent (construction, resupply units)
+signal supply_refunded(amount: float, reason: String)  ## Emitted when construction is cancelled and supply returned
 
 # =============================================================================
 # HELICOPTER SIGNALS (Phase 4)
@@ -131,6 +133,7 @@ signal projectile_fired(from: Vector3, to: Vector3)
 # UI SIGNALS
 # =============================================================================
 signal selection_changed(selected_units: Array)
+signal construction_site_clicked(site: Node3D, building_type: int, progress: float)
 
 # =============================================================================
 # VEHICLE COMPONENT SIGNALS (Phase 15 - Men of War style)

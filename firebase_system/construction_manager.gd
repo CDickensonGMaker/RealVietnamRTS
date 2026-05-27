@@ -324,9 +324,33 @@ func reset() -> void:
 
 
 func cancel_construction(zone: ConstructionZone) -> void:
-	"""Cancel construction on a zone"""
+	"""Cancel construction on a zone - refunds partial supply based on progress"""
 	if zone in active_constructions:
 		active_constructions.erase(zone)
+
+		# Calculate refund based on remaining work (what wasn't used)
+		if zone.building_data:
+			var progress: float = zone.current_progress
+			var refund_ratio: float = 1.0 - progress  # Full refund if 0% done, no refund if 100%
+			var refund_amount: int = int(zone.building_data.supply_cost * refund_ratio)
+
+			if refund_amount > 0:
+				var supply_mgr := get_node_or_null("/root/SupplyManager")
+				if supply_mgr and supply_mgr.has_method("add_global_supply"):
+					supply_mgr.add_global_supply(refund_amount)
+					print("[ConstructionManager] Refunded %d supply (%.0f%% of %d) for cancelled %s" % [
+						refund_amount, refund_ratio * 100, zone.building_data.supply_cost, zone.building_data.display_name
+					])
+				else:
+					# Fallback to firebase
+					var firebase: Node3D = _find_firebase_for_zone(zone)
+					if firebase and "supply_level" in firebase:
+						firebase.supply_level += refund_amount
+
+				# Emit signal for HUD feedback
+				if BattleSignals:
+					BattleSignals.supply_refunded.emit(refund_amount, zone.building_data.display_name)
+
 		zone.cancel_construction()
 
 
