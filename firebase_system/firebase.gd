@@ -22,6 +22,7 @@ const BuildingData = preload("res://firebase_system/building_data.gd")
 @export var firebase_name: String = "Firebase Alpha"
 @export var initial_level: FirebaseLevel = FirebaseLevel.PATROL_BASE
 @export var default_radius: float = 60.0  # Default perimeter radius (Pillar 2)
+@export var auto_activate: bool = false  ## Auto-activate on _ready() for testing/scene-placed firebases
 
 ## State
 var level: FirebaseLevel = FirebaseLevel.PATROL_BASE
@@ -61,12 +62,32 @@ func _ready() -> void:
 	_create_firebase_visual()
 
 	add_to_group("firebases")
-	add_to_group("all_units")
+	# Note: Don't add to "all_units" - that group is for squads/vehicles with is_dead() method
+
+	# Auto-activate for testing/scene-placed firebases
+	if auto_activate:
+		_is_active = true
+		print("[Firebase] %s AUTO-ACTIVATED (influence radius %.0fm)" % [firebase_name, influence_radius])
 
 	if BattleSignals:
 		BattleSignals.firebase_established.emit(self)
 
-	print("[Firebase] %s established (Level %d, radius %.0fm)" % [firebase_name, level, default_radius])
+	print("[Firebase] %s established (Level %d, radius %.0fm, active=%s)" % [firebase_name, level, default_radius, _is_active])
+
+
+func _exit_tree() -> void:
+	# Disconnect signal from HQ building to prevent callback to freed node
+	if is_instance_valid(_hq_building) and _hq_building.has_signal("destroyed"):
+		if _hq_building.is_connected("destroyed", Callable(self, "_on_hq_destroyed")):
+			_hq_building.destroyed.disconnect(_on_hq_destroyed)
+
+	# Clear references to external nodes
+	_hq_building = null
+
+	# Construction zones are children - they will be freed automatically
+	construction_zones.clear()
+	buildings.clear()
+	garrison.clear()
 
 
 func _init_default_perimeter() -> void:

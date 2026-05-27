@@ -49,6 +49,18 @@ func _ready() -> void:
 	print("[ConstructionManager] Initialized (auto-assign: %s)" % auto_assign_enabled)
 
 
+func _exit_tree() -> void:
+	# Clean up dynamically created container
+	if is_instance_valid(_building_container):
+		_building_container.queue_free()
+		_building_container = null
+
+	# Clear references
+	construction_queues.clear()
+	active_constructions.clear()
+	active_jobs.clear()
+
+
 func _process(delta: float) -> void:
 	_process_active_constructions(delta)
 	# NOTE: Job processing handled by JobSystem and WorkerController
@@ -106,12 +118,12 @@ func _process_queues() -> void:
 
 func _process_job_nodes(_delta: float) -> void:
 	"""DEPRECATED: Job processing now handled by JobSystem and WorkerController"""
-	pass
+	push_warning("[ConstructionManager] _process_job_nodes() is deprecated - use JobSystem")
 
 
 func _auto_assign_workers_to_jobs() -> void:
 	"""DEPRECATED: Worker assignment now handled by WorkerController (bottom-up job finding)"""
-	pass
+	push_warning("[ConstructionManager] _auto_assign_workers_to_jobs() is deprecated - use WorkerController")
 
 
 func _get_worker_class(worker: Node3D) -> String:
@@ -126,17 +138,19 @@ func _get_worker_class(worker: Node3D) -> String:
 
 func _find_idle_workers_for_job(_position: Vector3, _required_class: String) -> Array[Node3D]:
 	"""DEPRECATED: Worker finding now handled by WorkerController"""
+	push_warning("[ConstructionManager] _find_idle_workers_for_job() is deprecated - use WorkerController")
 	return []
 
 
 func _is_worker_assigned_to_job(_worker: Node3D) -> bool:
 	"""DEPRECATED: Job assignment now handled by WorkerController"""
+	push_warning("[ConstructionManager] _is_worker_assigned_to_job() is deprecated - use WorkerController")
 	return false
 
 
 func _send_worker_to_job(_worker: Node3D, _job: UnifiedJob) -> void:
 	"""DEPRECATED: Worker movement now handled by WorkerController"""
-	pass
+	push_warning("[ConstructionManager] _send_worker_to_job() is deprecated - use WorkerController")
 
 
 func _try_start_construction(firebase: Node3D, building_type: int) -> bool:
@@ -697,3 +711,57 @@ func create_firebase_at(position: Vector3, fb_name: String = "Firebase") -> Node
 
 	print("[ConstructionManager] Created firebase '%s' at %s" % [fb_name, position])
 	return firebase
+
+
+## =============================================================================
+## SCENE-PLACED BUILDING REGISTRATION
+## =============================================================================
+
+func register_scene_placed_hq_buildings() -> int:
+	"""Find and register any HQ buildings that were placed in the scene editor.
+	Call this at game start to activate firebases for pre-placed TOCs.
+	Returns the number of HQ buildings registered."""
+	var registered: int = 0
+
+	# Find all nodes that might be HQ buildings (TOC, Command Post, etc.)
+	# Check by name pattern or group membership
+	var potential_hqs: Array[Node] = []
+	potential_hqs.append_array(get_tree().get_nodes_in_group("hq_buildings"))
+
+	# Also search for nodes named "TOC" or containing "TOC"
+	for node in get_tree().current_scene.get_children():
+		if node is Node3D:
+			var name_lower: String = node.name.to_lower()
+			if "toc" in name_lower or "command" in name_lower or "hq" in name_lower:
+				if node not in potential_hqs:
+					potential_hqs.append(node)
+
+	for hq in potential_hqs:
+		if not hq is Node3D:
+			continue
+
+		# Get TOC building data
+		var toc_data: BuildingData = BuildingData.get_building_data(BuildingData.BuildingType.TOC)
+		if not toc_data:
+			continue
+
+		# Check if already within an active firebase
+		var already_registered: bool = false
+		for fb in get_tree().get_nodes_in_group("firebases"):
+			if fb.has_method("is_active") and fb.is_active():
+				if fb.global_position.distance_to(hq.global_position) < 20.0:
+					already_registered = true
+					break
+
+		if already_registered:
+			continue
+
+		# Create and activate firebase for this HQ
+		_handle_hq_building_completion(hq, toc_data, hq.global_position)
+		registered += 1
+		print("[ConstructionManager] Registered scene-placed HQ: %s" % hq.name)
+
+	if registered > 0:
+		print("[ConstructionManager] Registered %d scene-placed HQ building(s)" % registered)
+
+	return registered

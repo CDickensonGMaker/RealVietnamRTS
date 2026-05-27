@@ -1,0 +1,93 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://firebase_system/firebase.gd" id="1_firebase"]
+[ext_resource type="Script" path="res://firebase_system/placed_building.gd" id="2_building"]
+[ext_resource type="PackedScene" path="res://assets/models/structures/firebase/toc.glb" id="3_toc_model"]
+[ext_resource type="PackedScene" path="res://assets/models/structures/firebase/sandbag_bunker.glb" id="4_bunker_model"]
+[ext_resource type="PackedScene" path="res://assets/models/structures/firebase/mg_nest.glb" id="5_mg_model"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_toc"]
+size = Vector3(6, 3, 6)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_bunker"]
+size = Vector3(4, 2.5, 4)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_mg"]
+size = Vector3(3, 1.5, 3)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
+size = Vector2(200, 200)
+
+[sub_resource type="StandardMaterial3D" id="Material_ground"]
+albedo_color = Color(0.3, 0.4, 0.2, 1)
+
+[node name="FirebasePlacementTest" type="Node3D"]
+
+[node name="DirectionalLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.433, 0.25, 0, 0.5, 0.866, -0.5, -0.75, 0.433, 20, 30, 20)
+shadow_enabled = true
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_ground")
+surface_material_override/0 = SubResource("Material_ground")
+
+[node name="Firebase" type="Node3D" parent="."]
+script = ExtResource("1_firebase")
+firebase_name = "Firebase Test"
+auto_activate = true
+
+[node name="TOC" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+collision_layer = 64
+collision_mask = 1
+script = ExtResource("2_building")
+building_type = 18
+auto_create_firebase = false
+
+[node name="Model" parent="TOC" instance=ExtResource("3_toc_model")]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="TOC"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 0)
+shape = SubResource("BoxShape3D_toc")
+
+[node name="Bunker1" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 15, 0, 10)
+collision_layer = 64
+collision_mask = 1
+script = ExtResource("2_building")
+building_type = 3
+auto_create_firebase = false
+
+[node name="Model" parent="Bunker1" instance=ExtResource("4_bunker_model")]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Bunker1"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.25, 0)
+shape = SubResource("BoxShape3D_bunker")
+
+[node name="Bunker2" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -15, 0, 10)
+collision_layer = 64
+collision_mask = 1
+script = ExtResource("2_building")
+building_type = 3
+auto_create_firebase = false
+
+[node name="Model" parent="Bunker2" instance=ExtResource("4_bunker_model")]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Bunker2"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.25, 0)
+shape = SubResource("BoxShape3D_bunker")
+
+[node name="MGNest1" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 0, -5)
+collision_layer = 64
+collision_mask = 1
+script = ExtResource("2_building")
+building_type = 5
+auto_create_firebase = false
+
+[node name="Model" parent="MGNest1" instance=ExtResource("5_mg_model")]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="MGNest1"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
+shape = SubResource("BoxShape3D_mg")

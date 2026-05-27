@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://firebase_system/firebase.gd" id="1"]
+
+[node name="Firebase" type="Node3D"]
+script = ExtResource("1")
+firebase_name = "Firebase Alpha"
+initial_level = 0
+default_radius = 60.0
+auto_activate = true
