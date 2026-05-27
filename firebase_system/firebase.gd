@@ -40,7 +40,7 @@ var max_supply: float = 500.0
 ## HQ Building & Activation (PRD Phase 4)
 var _hq_building: Node3D = null  ## Reference to TOC/Command Post
 var _is_active: bool = false  ## Firebase only active when HQ is built
-var influence_radius: float = 150.0  ## Radius for supply/morale effects (per PRD)
+var influence_radius: float = 168.0  ## Radius for supply/morale effects (168m = 20% reduction from 210m)
 
 ## Stats
 var total_health: float = 500.0
@@ -144,27 +144,92 @@ func set_perimeter_polygon(polygon: PackedVector2Array) -> void:
 
 
 func _create_firebase_visual() -> void:
-	"""Create visual representation of firebase perimeter"""
-	var perimeter := MeshInstance3D.new()
-	perimeter.name = "Perimeter"
+	"""Create visual representation of firebase influence zone (shown during placement only)"""
+	# Influence zone ground circle (dashed ring showing buildable area)
+	_create_influence_zone_visual()
 
-	var radius: float = get_firebase_radius()
-	var torus := TorusMesh.new()
-	torus.inner_radius = radius - 0.5
-	torus.outer_radius = radius
-	torus.rings = 32
-	torus.ring_segments = 8
-	perimeter.mesh = torus
-	perimeter.position.y = 0.1
-	perimeter.rotation_degrees.x = 90
 
+## Reference to the influence zone visual for updates
+var _influence_zone_mesh: MeshInstance3D = null
+
+
+func _create_influence_zone_visual() -> void:
+	"""Create a visible dashed circle on the ground showing the influence/build zone.
+	   Starts HIDDEN - only shown during building placement mode."""
+	_influence_zone_mesh = MeshInstance3D.new()
+	_influence_zone_mesh.name = "InfluenceZone"
+
+	# Create thick dashed circle mesh using triangles
+	var mesh := _create_dashed_circle_mesh(influence_radius, 48)
+	_influence_zone_mesh.mesh = mesh
+	_influence_zone_mesh.position.y = 0.2  # Slightly above terrain
+
+	# Bright green material for buildable zone (more prominent)
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.4, 0.35, 0.2, 0.5)
+	mat.albedo_color = Color(0.2, 0.85, 0.4, 0.85)  # Bright green, high alpha
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	perimeter.material_override = mat
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_influence_zone_mesh.material_override = mat
 
-	add_child(perimeter)
+	add_child(_influence_zone_mesh)
+
+	# Start hidden - only show during placement mode
+	_influence_zone_mesh.visible = false
+
+
+func _create_dashed_circle_mesh(radius: float, segments: int = 48) -> ArrayMesh:
+	"""Create a thick dashed circle mesh using triangles for visibility"""
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var line_width: float = 3.0  # Thick visible line
+	var inner_r: float = radius - line_width
+	var outer_r: float = radius
+
+	for i in range(segments):
+		# Only draw every other segment (dashed effect)
+		if i % 2 == 0:
+			var angle1: float = TAU * float(i) / float(segments)
+			var angle2: float = TAU * float(i + 1) / float(segments)
+
+			# Inner edge vertices
+			var inner1 := Vector3(cos(angle1) * inner_r, 0, sin(angle1) * inner_r)
+			var inner2 := Vector3(cos(angle2) * inner_r, 0, sin(angle2) * inner_r)
+
+			# Outer edge vertices
+			var outer1 := Vector3(cos(angle1) * outer_r, 0, sin(angle1) * outer_r)
+			var outer2 := Vector3(cos(angle2) * outer_r, 0, sin(angle2) * outer_r)
+
+			# Triangle 1 (inner1 -> outer1 -> inner2)
+			st.add_vertex(inner1)
+			st.add_vertex(outer1)
+			st.add_vertex(inner2)
+
+			# Triangle 2 (inner2 -> outer1 -> outer2)
+			st.add_vertex(inner2)
+			st.add_vertex(outer1)
+			st.add_vertex(outer2)
+
+	return st.commit()
+
+
+func update_influence_zone_visual() -> void:
+	"""Update the influence zone circle (call when radius changes)"""
+	if is_instance_valid(_influence_zone_mesh):
+		_influence_zone_mesh.mesh = _create_dashed_circle_mesh(influence_radius, 48)
+
+
+func show_influence_zone() -> void:
+	"""Show the influence zone circle (called when entering placement mode)"""
+	if is_instance_valid(_influence_zone_mesh):
+		_influence_zone_mesh.visible = true
+
+
+func hide_influence_zone() -> void:
+	"""Hide the influence zone circle (called when exiting placement mode)"""
+	if is_instance_valid(_influence_zone_mesh):
+		_influence_zone_mesh.visible = false
 
 
 func _on_construction_complete(zone: ConstructionZone, building: Node3D) -> void:

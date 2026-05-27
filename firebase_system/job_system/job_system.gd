@@ -49,7 +49,7 @@ var _in_progress_jobs: Array[UnifiedJobClass] = []
 var _update_timer: float = 0.0
 
 ## DEBUG: Multiplier for work speed (set to 1.0 for normal, 50.0 for 5000% speed)
-const DEBUG_WORK_MULTIPLIER: float = 50.0
+const DEBUG_WORK_MULTIPLIER: float = 1.0
 
 ## Container for job-related nodes
 var _node_container: Node3D = null
@@ -257,15 +257,23 @@ func create_build_job(center: Vector3, building_type: int, rotation: float = 0.0
 	"""Create a building construction job with automatic clear/flatten prerequisites.
 	Returns null if validation fails or insufficient supply at nearest firebase.
 	Set skip_validation=true to bypass placement checks (for testing)."""
+	print("[JobSystem] create_build_job called: type=%d, center=%v, skip_validation=%s" % [
+		building_type, center, skip_validation
+	])
+
 	# Get building data for supply cost
 	var data: BuildingDataClass = BuildingDataClass.get_building_data(building_type)
 	if not data:
 		push_error("[JobSystem] Unknown building type: %d" % building_type)
 		return null
 
+	print("[JobSystem] create_build_job: building=%s, supply_cost=%d" % [data.display_name, data.supply_cost])
+
 	# Validate placement (overlap, slope, water)
 	if not skip_validation:
+		print("[JobSystem] create_build_job: running validation...")
 		var validation: Dictionary = validate_placement(center, footprint_size, building_type)
+		print("[JobSystem] create_build_job: validation result = %s" % validation)
 		if not validation.valid:
 			push_warning("[JobSystem] Cannot build %s: %s" % [data.display_name, validation.message])
 			return null
@@ -295,7 +303,8 @@ func create_build_job(center: Vector3, building_type: int, rotation: float = 0.0
 				BattleSignals.supply_consumed.emit(firebase, float(supply_cost), "construction: " + data.display_name)
 
 	# Create prerequisite jobs with HIGH priority to match the build job
-	var prereqs: Dictionary = _create_prerequisites(center, footprint_size, rotation, UnifiedJobClass.Priority.HIGH)
+	# For buildings: only create flatten job if slope is too steep (>0.25 ≈ 15 degrees)
+	var prereqs: Dictionary = _create_prerequisites(center, footprint_size, rotation, UnifiedJobClass.Priority.HIGH, true, 0.25)
 
 	# Create build job - we need to set metadata BEFORE _create_job_node runs
 	# because ConstructionSiteNode needs building_type and rotation during creation.
@@ -500,15 +509,47 @@ func get_jobs_in_area(center: Vector3, radius: float) -> Array[UnifiedJobClass]:
 	return get_jobs_in_world_bounds(bounds)
 
 
+func get_job_at_position(position: Vector3, tolerance: float = 2.0) -> UnifiedJobClass:
+	"""Find a job at/near a specific position (for click-to-assign workers)"""
+	var closest_job: UnifiedJobClass = null
+	var closest_dist: float = tolerance
+
+	# Check both ready and in-progress jobs
+	for job in _ready_jobs + _in_progress_jobs:
+		if not is_instance_valid(job):
+			continue
+		var job_pos: Vector3 = job.center_position
+		var dist: float = Vector2(position.x - job_pos.x, position.z - job_pos.z).length()
+		if dist < closest_dist:
+			closest_dist = dist
+			closest_job = job
+
+	return closest_job
+
+
+func get_job_for_site(site: Node3D) -> UnifiedJobClass:
+	"""Find the job associated with a construction site node"""
+	if not is_instance_valid(site):
+		return null
+
+	# Check for meta job_id on the site
+	if site.has_meta("job_id"):
+		var job_id: int = site.get_meta("job_id")
+		return get_job(job_id)
+
+	# Fallback: find job at site position
+	return get_job_at_position(site.global_position)
+
+
 func get_jobs_needing_workers(worker_class: String = "") -> Array[UnifiedJobClass]:
 	"""Get jobs that need workers, optionally filtered by worker class"""
 	var result: Array[UnifiedJobClass] = []
 
-	# Debug: Show state of job lists
-	if _ready_jobs.size() > 0 or _in_progress_jobs.size() > 0:
-		print("[JobSystem] get_jobs_needing_workers(%s): %d ready, %d in_progress" % [
-			worker_class, _ready_jobs.size(), _in_progress_jobs.size()
-		])
+	# Debug: Show state of job lists (disabled - causes console spam)
+	#if _ready_jobs.size() > 0 or _in_progress_jobs.size() > 0:
+	#	print("[JobSystem] get_jobs_needing_workers(%s): %d ready, %d in_progress" % [
+	#		worker_class, _ready_jobs.size(), _in_progress_jobs.size()
+	#	])
 
 	for job in _ready_jobs + _in_progress_jobs:
 		if not is_instance_valid(job):
@@ -516,17 +557,19 @@ func get_jobs_needing_workers(worker_class: String = "") -> Array[UnifiedJobClas
 		if job.assigned_workers.size() >= job.max_workers:
 			continue
 		if not job.can_be_worked():
-			print("[JobSystem] Job #%d not workable (state=%d, prereqs=%d)" % [
-				job.job_id, job.state, job.prerequisites.size()
-			])
+			# Debug disabled - causes console spam
+			#print("[JobSystem] Job #%d not workable (state=%d, prereqs=%d)" % [
+			#	job.job_id, job.state, job.prerequisites.size()
+			#])
 			continue
 
 		# Filter by worker class if specified
 		if worker_class != "":
 			if not can_worker_do_job(worker_class, job.job_type):
-				print("[JobSystem] Job #%d type %d not for worker class %s" % [
-					job.job_id, job.job_type, worker_class
-				])
+				# Debug disabled - causes console spam
+				#print("[JobSystem] Job #%d type %d not for worker class %s" % [
+				#	job.job_id, job.job_type, worker_class
+				#])
 				continue
 
 		result.append(job)
@@ -781,9 +824,17 @@ func carve_terrain_toward(center: Vector3, radius: float, target_height: float, 
 	var terrain := _get_terrain()
 	if not terrain or not terrain.has_method("modify_terrain"):
 		return
+
+	# CRITICAL: Normalize target_height to 0-1 range before lerping with heightmap data
+	# Heightmap stores normalized values (0-1), but target_height is in world meters
+	var height_scale: float = 280.0  # Default
+	if "height_scale" in terrain:
+		height_scale = terrain.height_scale
+	var normalized_target: float = target_height / height_scale
+
 	var step: float = clampf(amount, 0.0, 1.0)
 	var modifier := func(h: float, falloff: float) -> float:
-		return lerpf(h, target_height, clampf(step * falloff, 0.0, 1.0))
+		return lerpf(h, normalized_target, clampf(step * falloff, 0.0, 1.0))
 	terrain.modify_terrain(center, radius, modifier)
 
 
@@ -792,42 +843,53 @@ func carve_terrain_toward(center: Vector3, radius: float, target_height: float, 
 ## =============================================================================
 
 func get_worker_class(worker: Node3D) -> String:
-	"""Determine if a worker is an engineer or bulldozer"""
+	"""Determine if a worker is an engineer, bulldozer, or infantry (can't build)"""
 	if not is_instance_valid(worker):
-		return "engineer"
+		return "infantry"  # Default to non-builder
 
-	# Check if it's a bulldozer (vehicle with is_vehicle flag)
-	if worker.has_method("get"):
-		var data: Resource = worker.get("data")
-		if data and "is_vehicle" in data and data.is_vehicle:
-			return "bulldozer"
-
-	# Check for explicit worker_class property
+	# Check for explicit worker_class property first
 	if worker.has_method("get") and worker.get("worker_class") != null:
 		return worker.worker_class
 
-	return "engineer"
+	# Check squad data for capabilities
+	if worker.has_method("get"):
+		var data: Resource = worker.get("data")
+		if data:
+			# Bulldozer: vehicle with is_vehicle flag
+			if "is_vehicle" in data and data.is_vehicle:
+				return "bulldozer"
+			# Engineer: infantry with can_build flag
+			if "can_build" in data and data.can_build:
+				return "engineer"
+
+	# Default: regular infantry (cannot build structures)
+	return "infantry"
 
 
 func can_worker_do_job(worker_class: String, job_type: UnifiedJobClass.Type) -> bool:
-	"""Check if a worker class can work on a job type"""
+	"""Check if a worker class can work on a job type.
+	Worker classes: 'engineer' (can build), 'bulldozer' (vehicles), 'infantry' (combat only)"""
+	# Infantry cannot do any construction jobs
+	if worker_class == "infantry":
+		return false
+
 	match job_type:
 		UnifiedJobClass.Type.CLEAR_TERRAIN:
-			return true  # Both can clear
+			return worker_class in ["engineer", "bulldozer"]  # Both can clear
 		UnifiedJobClass.Type.FLATTEN_AREA:
-			return true  # Both can flatten (bulldozer faster)
+			return worker_class in ["engineer", "bulldozer"]  # Both can flatten (bulldozer faster)
 		UnifiedJobClass.Type.BUILD_STRUCTURE:
-			return worker_class == "engineer"  # Only engineers build
+			return worker_class in ["engineer", "bulldozer"]  # Both can build structures
 		UnifiedJobClass.Type.BUILD_ROAD:
 			return worker_class == "bulldozer"  # Bulldozers build roads
 		UnifiedJobClass.Type.FILL_CRATER:
-			return true  # Both can fill
+			return worker_class in ["engineer", "bulldozer"]  # Both can fill
 		UnifiedJobClass.Type.DIG_TRENCH:
 			return worker_class == "engineer"  # Engineers dig
 		UnifiedJobClass.Type.LAY_WIRE:
 			return worker_class == "engineer"  # Engineers lay wire
 		_:
-			return true
+			return false  # Unknown job types: no one can do by default
 
 
 func get_work_rate_multiplier(worker_class: String, job_type: UnifiedJobClass.Type) -> float:
@@ -841,7 +903,7 @@ func get_work_rate_multiplier(worker_class: String, job_type: UnifiedJobClass.Ty
 		UnifiedJobClass.Type.FLATTEN_AREA:
 			return 2.0 if worker_class == "bulldozer" else 0.5  # Bulldozers much faster
 		UnifiedJobClass.Type.BUILD_STRUCTURE:
-			return 1.0
+			return 1.0 if worker_class == "engineer" else 0.7  # Bulldozers slower at fine construction
 		UnifiedJobClass.Type.BUILD_ROAD:
 			return 1.0 if worker_class == "bulldozer" else 0.3
 		UnifiedJobClass.Type.FILL_CRATER:
@@ -1094,10 +1156,14 @@ func _on_road_complete(job: UnifiedJobClass) -> void:
 ## =============================================================================
 
 func _create_prerequisites(center: Vector3, footprint_size: Vector2, rotation_y: float = 0.0,
-						   priority: UnifiedJobClass.Priority = UnifiedJobClass.Priority.NORMAL) -> Dictionary:
+						   priority: UnifiedJobClass.Priority = UnifiedJobClass.Priority.NORMAL,
+						   check_slope_for_flatten: bool = false,
+						   max_slope_for_building: float = 0.25) -> Dictionary:
 	"""Create clear and flatten prerequisite jobs if needed. Returns {clear_job, flatten_job}
 	   When rotation_y is non-zero, computes axis-aligned bbox of rotated rectangle.
-	   Prerequisites inherit the parent job's priority for proper worker assignment."""
+	   Prerequisites inherit the parent job's priority for proper worker assignment.
+	   When check_slope_for_flatten=true, only creates flatten job if slope exceeds max_slope_for_building.
+	   Slope is 0-1 normalized (0=flat, 1=cliff). 0.25 ≈ 15 degree slope."""
 	var clearing_system := get_node_or_null("/root/ClearingSystem")
 	var terrain_grid := get_node_or_null("/root/TerrainIntegration")
 	var needs_clearing: bool = false  # Default to NOT needing clearing (optimistic)
@@ -1145,20 +1211,35 @@ func _create_prerequisites(center: Vector3, footprint_size: Vector2, rotation_y:
 		if absf(rotation_y) > 0.01:
 			clear_job.metadata["rotation"] = rotation_y
 
-	# Always flatten for construction
-	flatten_job = create_job(
-		UnifiedJobClass.Type.FLATTEN_AREA,
-		center,
-		effective_size,
-		priority
-	)
-	# Store rotation in metadata for oriented flattening (future use)
-	if absf(rotation_y) > 0.01:
-		flatten_job.metadata["rotation"] = rotation_y
+	# Determine if flatten is needed
+	var needs_flatten: bool = true  # Default for trenches and explicit flatten jobs
 
-	# Flatten depends on clear
-	if clear_job:
-		flatten_job.add_prerequisite(clear_job)
+	if check_slope_for_flatten:
+		# For buildings: only flatten if slope is too steep
+		needs_flatten = false
+		if terrain_grid and terrain_grid.has_method("get_slope_at"):
+			var slope: float = terrain_grid.get_slope_at(center)
+			needs_flatten = slope > max_slope_for_building
+		elif terrain_grid and terrain_grid.has_method("get"):
+			var tg = terrain_grid.get("terrain_grid")
+			if tg and tg.has_method("get_slope_at"):
+				var slope: float = tg.get_slope_at(center)
+				needs_flatten = slope > max_slope_for_building
+
+	if needs_flatten:
+		flatten_job = create_job(
+			UnifiedJobClass.Type.FLATTEN_AREA,
+			center,
+			effective_size,
+			priority
+		)
+		# Store rotation in metadata for oriented flattening (future use)
+		if absf(rotation_y) > 0.01:
+			flatten_job.metadata["rotation"] = rotation_y
+
+		# Flatten depends on clear
+		if clear_job:
+			flatten_job.add_prerequisite(clear_job)
 
 	return {"clear_job": clear_job, "flatten_job": flatten_job}
 
@@ -1554,6 +1635,7 @@ func _check_firebase_zone(center: Vector3, building_type: int) -> Dictionary:
 	# Buildings that can_place_anywhere don't need firebase zone
 	# This includes: Field defenses (sandbags, wire, claymores) AND TOC itself
 	if building_data.can_place_anywhere:
+		print("[JobSystem] _check_firebase_zone: %s can_place_anywhere=true, skipping" % building_data.display_name)
 		return {"valid": true, "error": PlacementError.NONE, "message": ""}
 
 	# Firebase Defense buildings require being within a TOC influence zone
@@ -1563,13 +1645,26 @@ func _check_firebase_zone(center: Vector3, building_type: int) -> Dictionary:
 		if is_instance_valid(node):
 			firebases.append(node)
 
+	print("[JobSystem] _check_firebase_zone: %s requires firebase, found %d firebases" % [
+		building_data.display_name, firebases.size()
+	])
+
 	# Check if position is within any firebase influence zone
 	for firebase in firebases:
 		if firebase.has_method("is_position_in_influence"):
-			if firebase.is_position_in_influence(center):
+			var is_active: bool = firebase.is_active() if firebase.has_method("is_active") else false
+			var influence_r: float = firebase.influence_radius if "influence_radius" in firebase else 0.0
+			var dist: float = firebase.global_position.distance_to(center)
+			var in_influence: bool = firebase.is_position_in_influence(center)
+			print("[JobSystem]   Firebase '%s': is_active=%s, influence_radius=%.1f, dist=%.1f, in_influence=%s" % [
+				firebase.firebase_name if "firebase_name" in firebase else "unknown",
+				is_active, influence_r, dist, in_influence
+			])
+			if in_influence:
 				return {"valid": true, "error": PlacementError.NONE, "message": ""}
 
 	# Not within any firebase zone - placement invalid for Firebase Defense buildings
+	print("[JobSystem] _check_firebase_zone: FAILED - not in any active firebase zone")
 	return {
 		"valid": false,
 		"error": PlacementError.OUTSIDE_FIREBASE,

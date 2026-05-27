@@ -446,7 +446,71 @@ func spawn_building_at(world_position: Vector3, building_type: int, rotation_y: 
 	if building.has_method("initialize_from_building_data") and data:
 		building.initialize_from_building_data(data)
 
+	# HQ BUILDING ACTIVATION: If this is an HQ building (TOC), create/activate a firebase
+	if data and data.is_hq_building:
+		_handle_hq_building_completion(building, data, world_position)
+
 	return building
+
+
+func _handle_hq_building_completion(hq_building: Node3D, building_data: BuildingData, world_position: Vector3) -> void:
+	"""Handle HQ building (TOC) completion - create or activate firebase.
+	When a TOC completes construction, it creates a firebase zone that enables
+	other buildings to be placed within its influence radius."""
+	print("[ConstructionManager] HQ building completed at %v - activating firebase" % world_position)
+
+	# Check if there's already a firebase at this location
+	var existing_firebase: Node = null
+	for fb in get_tree().get_nodes_in_group("firebases"):
+		if not is_instance_valid(fb):
+			continue
+		var dist: float = fb.global_position.distance_to(world_position)
+		if dist < 20.0:  # Within 20m = same firebase
+			existing_firebase = fb
+			break
+
+	if existing_firebase:
+		# Activate existing firebase with this HQ
+		print("[ConstructionManager] Found existing firebase '%s' - activating with HQ" % (
+			existing_firebase.firebase_name if "firebase_name" in existing_firebase else "unknown"
+		))
+		if existing_firebase.has_method("_activate_with_hq"):
+			existing_firebase._activate_with_hq(hq_building, building_data)
+	else:
+		# Create new firebase centered on the TOC
+		print("[ConstructionManager] Creating new firebase for HQ building")
+		var Firebase = load("res://firebase_system/firebase.gd")
+		if Firebase:
+			var firebase: Node3D = Firebase.new()
+			firebase.name = "Firebase_" + str(get_tree().get_nodes_in_group("firebases").size())
+			firebase.position = world_position
+			firebase.firebase_name = "Firebase " + _get_firebase_phonetic_name()
+
+			# Add to scene tree
+			_get_building_container().add_child(firebase)
+
+			# Activate with the HQ building
+			if firebase.has_method("_activate_with_hq"):
+				firebase._activate_with_hq(hq_building, building_data)
+
+			print("[ConstructionManager] Created and activated firebase '%s' with %.0fm influence" % [
+				firebase.firebase_name, building_data.influence_radius
+			])
+
+
+func _get_firebase_phonetic_name() -> String:
+	"""Generate a phonetic alphabet name for the firebase (Alpha, Bravo, etc.)"""
+	var names: Array[String] = [
+		"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot",
+		"Golf", "Hotel", "India", "Juliet", "Kilo", "Lima",
+		"Mike", "November", "Oscar", "Papa", "Quebec", "Romeo",
+		"Sierra", "Tango", "Uniform", "Victor", "Whiskey", "X-Ray",
+		"Yankee", "Zulu"
+	]
+	var index: int = get_tree().get_nodes_in_group("firebases").size()
+	if index < names.size():
+		return names[index]
+	return "Firebase" + str(index)
 
 
 func _create_placeholder_building(data: BuildingData, building_type: int) -> Node3D:

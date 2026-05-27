@@ -28,6 +28,7 @@ enum State {
 signal placement_started(building_type: int)
 signal placement_committed(building_type: int, position: Vector3)
 signal placement_cancelled()
+signal placement_failed(building_type: int, reason: String)
 signal linear_segment_committed(building_type: int, positions: Array)
 signal validation_changed(valid: bool, message: String)
 
@@ -140,6 +141,9 @@ func start_placement(building_type: int, initial_cursor_pos: Vector3 = Vector3.I
 
 	# Track activation frame to prevent menu click from immediately committing
 	_activation_frame = Engine.get_process_frames()
+
+	# Show firebase influence zones so player knows where they can build
+	_show_firebase_influence_zones()
 
 	# Choose mode based on building properties
 	if _current_building_data.is_linear_placement:
@@ -265,9 +269,12 @@ func _update_single_placement() -> void:
 
 func _commit_single_placement(position: Vector3) -> bool:
 	"""Commit single building placement"""
+	print("[PlacementController] _commit_single_placement at %v" % position)
+	print("[PlacementController] _last_validation_result = %s" % _last_validation_result)
 	if not _last_validation_result.get("valid", false):
 		var error_msg: String = _last_validation_result.get("message", "Unknown error")
 		print("[PlacementController] Cannot place - invalid location: %s" % error_msg)
+		placement_failed.emit(_current_building_type, error_msg)
 		# Cancel placement after failed validation so user can interact with UI
 		cancel_placement()
 		return false
@@ -285,6 +292,23 @@ func _commit_single_placement(position: Vector3) -> bool:
 		rotation_y = deg_to_rad(_arc_facing)
 		# Also store in building_data for the spawn process
 		_current_building_data.initial_facing = _arc_facing
+
+	# Pre-validate with JobSystem to get specific failure reason
+	if _job_system and _job_system.has_method("validate_placement"):
+		print("[PlacementController] Running pre-validation for %s at %v" % [
+			_current_building_data.display_name, position
+		])
+		var pre_check: Dictionary = _job_system.validate_placement(
+			position, _current_building_data.footprint_size, _current_building_type, rotation_y
+		)
+		print("[PlacementController] Pre-validation result: %s" % pre_check)
+		if not pre_check.get("valid", false):
+			var error_msg: String = pre_check.get("message", "Placement blocked")
+			print("[PlacementController] Cannot place - %s" % error_msg)
+			placement_failed.emit(_current_building_type, error_msg)
+			cancel_placement()
+			return false
+		print("[PlacementController] Pre-validation PASSED, calling create_build_job")
 
 	# Create build job through JobSystem
 	# Signature: create_build_job(center, building_type, rotation, footprint_size, skip_validation)
@@ -311,13 +335,16 @@ func _commit_single_placement(position: Vector3) -> bool:
 			_reset_state()
 			return true
 		else:
-			print("[PlacementController] Failed to create build job")
-			# Cancel placement after job creation failure
+			# Job creation failed (supply, distance, etc.) - get reason
+			var fail_reason: String = "Insufficient supply or too far from firebase"
+			print("[PlacementController] Failed to create build job: %s" % fail_reason)
+			placement_failed.emit(_current_building_type, fail_reason)
 			cancel_placement()
 			return false
 	else:
-		push_warning("[PlacementController] JobSystem not available")
-		# Cancel placement if no job system
+		var error_msg: String = "JobSystem not available"
+		push_warning("[PlacementController] %s" % error_msg)
+		placement_failed.emit(_current_building_type, error_msg)
 		cancel_placement()
 		return false
 
@@ -524,6 +551,9 @@ func _handle_left_click(position: Vector3) -> bool:
 	"""Handle left-click during placement.
 	   For arc buildings (MG nest, mortar pit): first click anchors, second click confirms.
 	   For other buildings: single click places."""
+	print("[PlacementController] _handle_left_click at %v, state=%d, building=%s" % [
+		position, state, _current_building_data.display_name if _current_building_data else "none"
+	])
 	match state:
 		State.SINGLE_PLACING:
 			if _is_arc_building():
@@ -818,6 +848,9 @@ func _destroy_ghost() -> void:
 
 func _reset_state() -> void:
 	"""Reset all state to idle"""
+	# Hide firebase influence zones when exiting placement mode
+	_hide_firebase_influence_zones()
+
 	state = State.IDLE
 	_current_building_type = -1
 	_current_building_data = null
@@ -862,3 +895,23 @@ func get_valid_segment_count() -> int:
 		if valid:
 			count += 1
 	return count
+
+
+## =============================================================================
+## FIREBASE INFLUENCE ZONE DISPLAY
+## =============================================================================
+
+func _show_firebase_influence_zones() -> void:
+	"""Show influence zones for all active firebases during placement mode"""
+	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
+	for fb in firebases:
+		if fb.has_method("show_influence_zone"):
+			fb.show_influence_zone()
+
+
+func _hide_firebase_influence_zones() -> void:
+	"""Hide influence zones for all firebases when exiting placement mode"""
+	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
+	for fb in firebases:
+		if fb.has_method("hide_influence_zone"):
+			fb.hide_influence_zone()

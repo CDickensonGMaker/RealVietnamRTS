@@ -285,7 +285,7 @@ enum BuildingCategory {
 
 ## HQ Building (PRD Phase 4 - Firebase Influence)
 @export var is_hq_building: bool = false  ## If true, activates firebase influence radius
-@export var influence_radius: float = 150.0  ## Influence radius when this HQ is active (per PRD)
+@export var influence_radius: float = 168.0  ## Influence radius when this HQ is active (168m)
 
 ## Placement Properties
 ## CoH-style linear placement implemented in PlacementController (firebase_system/placement_controller.gd)
@@ -625,7 +625,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.height = 2.5
 			data.construction_slots = 2
 			data.is_hq_building = true  # PRD Phase 4: Activates firebase
-			data.influence_radius = 150.0  # Per PRD: 150m influence radius
+			data.influence_radius = 168.0  # Build radius for firebase
 			data.can_place_anywhere = true  # TOC can be placed anywhere to start a new firebase
 			data.requires_cleared_terrain = false  # Will need clearing around it, but can initiate anywhere
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
