@@ -1,0 +1,1365 @@
+# Technical Requirements Registry
+# RealVietnamRTS - Architecture Review Document
+# Generated from: GAME_BIBLE.md and PRD.md
+# Last updated: 2026-05-25
+
+---
+# =============================================================================
+# FOUNDATION LAYER - Engine, Performance, Platform, Save System
+# =============================================================================
+
+TR-FND-001:
+  description: "Target platform is Steam PC only (Windows primary)"
+  source: "PRD.md:Section 1.2 Business Model"
+  layer: Foundation
+  priority: P0
+
+TR-FND-002:
+  description: "Engine is Godot 4.5+ with GDScript primary language"
+  source: "PRD.md:Section 20.4 Engine"
+  layer: Foundation
+  priority: P0
+
+TR-FND-003:
+  description: "Minimum GPU: Intel UHD 620 (potato-friendly target)"
+  source: "PRD.md:Section 20.1 Target Specs"
+  layer: Foundation
+  priority: P0
+
+TR-FND-004:
+  description: "Recommended GPU: GTX 1060 / RX 580"
+  source: "PRD.md:Section 20.1 Target Specs"
+  layer: Foundation
+  priority: P1
+
+TR-FND-005:
+  description: "Minimum CPU: i5-4590, Recommended: i5-8400"
+  source: "PRD.md:Section 20.1 Target Specs"
+  layer: Foundation
+  priority: P0
+
+TR-FND-006:
+  description: "RAM requirement: 8GB minimum, 16GB recommended"
+  source: "PRD.md:Section 20.1 Target Specs"
+  layer: Foundation
+  priority: P0
+
+TR-FND-007:
+  description: "Storage requirement: 2GB minimum, 5GB recommended"
+  source: "PRD.md:Section 20.1 Target Specs"
+  layer: Foundation
+  priority: P1
+
+TR-FND-008:
+  description: "60 FPS with 300-500 units on recommended specs"
+  source: "PRD.md:Section 20.2 Performance Targets"
+  layer: Foundation
+  priority: P0
+
+TR-FND-009:
+  description: "30 FPS minimum on potato specs (Intel UHD 620)"
+  source: "PRD.md:Section 20.2 Performance Targets"
+  layer: Foundation
+  priority: P0
+
+TR-FND-010:
+  description: "Cell/chunk streaming for large maps (TerrainEngine integration)"
+  source: "PRD.md:Section 20.2 Performance Targets"
+  layer: Foundation
+  priority: P0
+
+TR-FND-011:
+  description: "Efficient spatial hashing for unit queries (O(1) lookups)"
+  source: "PRD.md:Section 20.2 Performance Targets"
+  layer: Foundation
+  priority: P0
+
+TR-FND-012:
+  description: "LOD system for large battles (distant units as NATO markers)"
+  source: "PRD.md:Section 20.2 Performance Targets"
+  layer: Foundation
+  priority: P0
+
+TR-FND-013:
+  description: "Autosave at mission start, map expansion, and every 10 minutes"
+  source: "PRD.md:Section 15.1 Save Points"
+  layer: Foundation
+  priority: P1
+
+TR-FND-014:
+  description: "Save system must serialize: terrain state, buildings, units, supply, AI Director state"
+  source: "PRD.md:Section 15.3 What Gets Saved"
+  layer: Foundation
+  priority: P1
+
+TR-FND-015:
+  description: "All systems must use serialization-friendly patterns from day one (state in data, not scene graph)"
+  source: "GAME_BIBLE.md:D-106"
+  layer: Foundation
+  priority: P0
+
+TR-FND-016:
+  description: "No raw Node references stored across frames - use IDs or paths"
+  source: "GAME_BIBLE.md:D-106"
+  layer: Foundation
+  priority: P0
+
+TR-FND-017:
+  description: "TerrainEngine: 3km x 3km chunked streaming with domain warping and hydraulic erosion"
+  source: "GAME_BIBLE.md:D-304"
+  layer: Foundation
+  priority: P0
+
+TR-FND-018:
+  description: "Physics layers defined: terrain, infantry, vehicles, structures, projectiles, cover, jungle"
+  source: "GAME_BIBLE.md:Phase 0"
+  layer: Foundation
+  priority: P0
+
+TR-FND-019:
+  description: "Input map: WASD+arrows, mouse select/command, Q/E rotate, scroll zoom, hotkeys 1-9, F1-F4 debug"
+  source: "GAME_BIBLE.md:Phase 0"
+  layer: Foundation
+  priority: P0
+
+TR-FND-020:
+  description: "Line endings normalized to LF for all .gd files"
+  source: "GAME_BIBLE.md:Phase 0"
+  layer: Foundation
+  priority: P2
+
+---
+# =============================================================================
+# CORE LAYER - Combat, Movement, AI, Supply
+# =============================================================================
+
+# Combat System (Pillar 5: The War Continues - Auto-defense)
+
+TR-COR-001:
+  description: "Cover system with four levels: NONE (0%), LIGHT (25%), PARTIAL (50%), HEAVY (75%) damage reduction"
+  source: "PRD.md:Section 11.2 Cover System"
+  layer: Core
+  priority: P0
+
+TR-COR-002:
+  description: "Suppression reduces movement speed 50% and accuracy 50%"
+  source: "PRD.md:Section 11.3 Suppression"
+  layer: Core
+  priority: P0
+
+TR-COR-003:
+  description: "Lethality tuned for Steel Division style: full squad wipe takes 30-60 seconds of sustained fire"
+  source: "PRD.md:Section 11.1 Lethality"
+  layer: Core
+  priority: P0
+
+TR-COR-004:
+  description: "Four damage types: Small Arms, Heavy MG, Explosive, Armor-Piercing"
+  source: "PRD.md:Section 11.5 Damage Types"
+  layer: Core
+  priority: P0
+
+TR-COR-005:
+  description: "Auto-defense: all defensive structures and garrisoned squads use fire-at-will engagement"
+  source: "PRD.md:Section 11.4 Auto-Defense Behavior"
+  layer: Core
+  priority: P0
+
+TR-COR-006:
+  description: "Squads track individual soldier casualties (N soldiers, damage, dies at N=0)"
+  source: "GAME_BIBLE.md:Phase 2"
+  layer: Core
+  priority: P0
+
+TR-COR-007:
+  description: "Standing orders: Guard, Patrol, Aggressive, Hold Fire"
+  source: "GAME_BIBLE.md:Phase 2"
+  layer: Core
+  priority: P0
+
+# Morale System (Reference: Total War routing)
+
+TR-COR-010:
+  description: "Four morale states: STEADY (70-100), WAVERING (40-70), SHAKEN (20-40), BROKEN (0-20)"
+  source: "PRD.md:Section 7.1 Morale States"
+  layer: Core
+  priority: P0
+
+TR-COR-011:
+  description: "Morale modifiers (continuous): under fire -0.3/sec, surrounded -1.25/sec, dehydrated -0.5/sec"
+  source: "PRD.md:Section 7.2 Morale Modifiers"
+  layer: Core
+  priority: P0
+
+TR-COR-012:
+  description: "Morale modifiers (positive): near firebase +1.0/sec, near allies +0.5/sec, winning +0.6/sec"
+  source: "PRD.md:Section 7.2 Morale Modifiers"
+  layer: Core
+  priority: P0
+
+TR-COR-013:
+  description: "One-time morale events: ally killed -3, squad leader killed -15, flanked -8, reinforcements +10"
+  source: "PRD.md:Section 7.3 One-Time Morale Events"
+  layer: Core
+  priority: P0
+
+TR-COR-014:
+  description: "BROKEN units (50%+ soldiers broken) attempt return to nearest firebase"
+  source: "PRD.md:Section 7.4 Routing Behavior"
+  layer: Core
+  priority: P0
+
+TR-COR-015:
+  description: "SHATTERED units (80%+ broken) go rogue - ignore orders, survival mode"
+  source: "PRD.md:Section 7.4 Routing Behavior"
+  layer: Core
+  priority: P0
+
+TR-COR-016:
+  description: "Routed units can recover after 5+ seconds without contact in safe area"
+  source: "PRD.md:Section 7.4 Routing Behavior"
+  layer: Core
+  priority: P1
+
+TR-COR-017:
+  description: "SHATTERED squads cannot rally - combat-ineffective until medevac or mission end"
+  source: "PRD.md:Section 7.4 Routing Behavior"
+  layer: Core
+  priority: P1
+
+# Unit Resource System (Pillar 3: Physical Supply Chains)
+
+TR-COR-020:
+  description: "Squads carry internal reserves: Ammo, Water, Morale"
+  source: "PRD.md:Section 6.1 Resource Types"
+  layer: Core
+  priority: P0
+
+TR-COR-021:
+  description: "Low Ammo triggers LOW AMMO icon; Empty Ammo triggers auto-retreat plus voice callout"
+  source: "PRD.md:Section 6.1 Resource Types"
+  layer: Core
+  priority: P0
+
+TR-COR-022:
+  description: "Low Water causes accelerated morale drain; Empty Water causes severe morale drain"
+  source: "PRD.md:Section 6.1 Resource Types"
+  layer: Core
+  priority: P0
+
+TR-COR-023:
+  description: "Squads within firebase influence radius automatically resupply"
+  source: "PRD.md:Section 6.3 Resupply Mechanics"
+  layer: Core
+  priority: P0
+
+TR-COR-024:
+  description: "Squads outside influence must return to firebase or receive helicopter/truck delivery"
+  source: "PRD.md:Section 6.3 Resupply Mechanics"
+  layer: Core
+  priority: P0
+
+TR-COR-025:
+  description: "Audio callout when squad retreats: SQUAD OUT OF SUPPLIES FALLING BACK"
+  source: "PRD.md:Section 6.3 Resupply Mechanics"
+  layer: Core
+  priority: P1
+
+# Movement System
+
+TR-COR-030:
+  description: "NavigationServer3D pathfinding with terrain-cost modifiers (jungle slow, road fast, water impassable)"
+  source: "GAME_BIBLE.md:Phase 2"
+  layer: Core
+  priority: P0
+
+TR-COR-031:
+  description: "Movement: right-click to move, shift-click to queue waypoints"
+  source: "GAME_BIBLE.md:Phase 2"
+  layer: Core
+  priority: P0
+
+# AI Director (L4D-style dynamic system)
+
+TR-COR-040:
+  description: "AI Director monitors: firebase integrity, supply status, casualty rate, defensive coverage, player idle time"
+  source: "PRD.md:Section 12.1 Director Inputs"
+  layer: Core
+  priority: P0
+
+TR-COR-041:
+  description: "AI Director outputs: attack frequency (5-15 min), intensity (1-4 squads), direction (weak points), type"
+  source: "PRD.md:Section 12.2 Director Outputs"
+  layer: Core
+  priority: P0
+
+TR-COR-042:
+  description: "AI escalation: Early (0-15min) 1-2 squads, Mid (15-35min) 2-3 squads+mortars, Late (35+min) 3-4 squads+sappers"
+  source: "PRD.md:Section 12.3 Escalation"
+  layer: Core
+  priority: P0
+
+TR-COR-043:
+  description: "VC tactics: night attack, sapper raid, mortar harassment, human wave, convoy ambush"
+  source: "PRD.md:Section 12.4 VC Tactics"
+  layer: Core
+  priority: P0
+
+---
+# =============================================================================
+# SYSTEMS LAYER - Doctrine, Terrain, Construction, Firebase, Weather
+# =============================================================================
+
+# Terrain Clearing System (Pillar 1: Carve the Map)
+
+TR-SYS-001:
+  description: "Terrain clearing progression: JUNGLE -> PARTIALLY_CLEARED -> CLEARED -> FORTIFIED"
+  source: "GAME_BIBLE.md:D-304"
+  layer: Systems
+  priority: P0
+
+TR-SYS-002:
+  description: "Bulldozers: fast, large-area, road-grade clearing (required for roads and large buildings)"
+  source: "GAME_BIBLE.md:D-103"
+  layer: Systems
+  priority: P0
+
+TR-SYS-003:
+  description: "Engineer det-cord: slower, smaller, tactical clearing (jungle pockets, LZs, fire lanes)"
+  source: "GAME_BIBLE.md:D-103"
+  layer: Systems
+  priority: P0
+
+TR-SYS-004:
+  description: "Bulldozers cannot easily push up steep hills; engineers more flexible on terrain"
+  source: "GAME_BIBLE.md:D-103"
+  layer: Systems
+  priority: P1
+
+TR-SYS-005:
+  description: "Both clearing tools are vulnerable while working"
+  source: "GAME_BIBLE.md:D-103"
+  layer: Systems
+  priority: P1
+
+TR-SYS-006:
+  description: "Terrain types respond differently to each clearing tool"
+  source: "GAME_BIBLE.md:D-103"
+  layer: Systems
+  priority: P1
+
+TR-SYS-007:
+  description: "Craters from explosives persist (DamageSystem terrain deformation)"
+  source: "GAME_BIBLE.md:D-304"
+  layer: Systems
+  priority: P0
+
+TR-SYS-008:
+  description: "Clear jungle (small) with engineer det-cord: 60 sec"
+  source: "PRD.md:Section 10.2 Terrain Modification"
+  layer: Systems
+  priority: P1
+
+TR-SYS-009:
+  description: "Clear jungle (large) with bulldozer: 30 sec"
+  source: "PRD.md:Section 10.2 Terrain Modification"
+  layer: Systems
+  priority: P1
+
+TR-SYS-010:
+  description: "Cut road through jungle with bulldozer: 2-3 min per 100m"
+  source: "PRD.md:Section 10.2 Terrain Modification"
+  layer: Systems
+  priority: P1
+
+TR-SYS-011:
+  description: "Prepare LZ with engineer or bulldozer: 90 sec"
+  source: "PRD.md:Section 10.2 Terrain Modification"
+  layer: Systems
+  priority: P1
+
+# Firebase System (Pillar 2: Network of Firebases)
+
+TR-SYS-020:
+  description: "Firebase defined by placing HQ Building (Command Post, TOC, Firebase HQ)"
+  source: "PRD.md:Section 8.1 Firebase Definition"
+  layer: Systems
+  priority: P0
+
+TR-SYS-021:
+  description: "HQ creates influence radius for: auto-supply, morale bonus, engineer auto-build, auto-fire"
+  source: "PRD.md:Section 8.2 HQ Influence Radius"
+  layer: Systems
+  priority: P0
+
+TR-SYS-022:
+  description: "Firebase HQ influence radius: 150m with 12 building slots"
+  source: "PRD.md:Section 8.2 HQ Influence Radius"
+  layer: Systems
+  priority: P0
+
+TR-SYS-023:
+  description: "Maximum 4-6 firebases active simultaneously"
+  source: "PRD.md:Section 8.3 Firebase Limit"
+  layer: Systems
+  priority: P0
+
+TR-SYS-024:
+  description: "Outposts (sandbag positions outside radius) have no auto-supply, no morale bonus"
+  source: "PRD.md:Section 8.4 Outposts"
+  layer: Systems
+  priority: P1
+
+TR-SYS-025:
+  description: "MVP scope: one main firebase + one forward outpost, linked by one cleared road"
+  source: "GAME_BIBLE.md:D-002"
+  layer: Systems
+  priority: P0
+
+TR-SYS-026:
+  description: "All systems must scale from 2 to N firebases without architectural changes"
+  source: "GAME_BIBLE.md:D-002"
+  layer: Systems
+  priority: P0
+
+# Construction System (Pillar 2: Network of Firebases)
+
+TR-SYS-030:
+  description: "Engineers auto-build inside established zones (firebase perimeters, cleared areas)"
+  source: "GAME_BIBLE.md:D-102"
+  layer: Systems
+  priority: P0
+
+TR-SYS-031:
+  description: "Engineers manually commanded for construction outside zones (forward bunkers, ambush positions)"
+  source: "GAME_BIBLE.md:D-102"
+  layer: Systems
+  priority: P0
+
+TR-SYS-032:
+  description: "Engineers under fire: pause construction, seek cover, resume when safe"
+  source: "GAME_BIBLE.md:D-102"
+  layer: Systems
+  priority: P1
+
+TR-SYS-033:
+  description: "Any squad can build: Sandbags, Foxholes, Wire (both inside and outside firebase)"
+  source: "PRD.md:Section 10.1 Who Can Build What"
+  layer: Systems
+  priority: P0
+
+TR-SYS-034:
+  description: "Engineer squad can build all buildings (auto inside, manual outside)"
+  source: "PRD.md:Section 10.1 Who Can Build What"
+  layer: Systems
+  priority: P0
+
+TR-SYS-035:
+  description: "Building inheritance: BaseStructure extends StaticBody3D"
+  source: "GAME_BIBLE.md:D-302"
+  layer: Systems
+  priority: P0
+
+TR-SYS-036:
+  description: "Paint/drag perimeter tools for sandbag/wire inside established zones"
+  source: "GAME_BIBLE.md:Phase 3"
+  layer: Systems
+  priority: P1
+
+# Supply and Logistics System (Pillar 3: Physical Supply Chains)
+
+TR-SYS-040:
+  description: "Supply sources: Rear Depot (infinite, fixed), Airstrip (fixed, can be cratered), Supply Depot (built)"
+  source: "PRD.md:Section 9.1 Supply Sources"
+  layer: Systems
+  priority: P0
+
+TR-SYS-041:
+  description: "Truck convoy: high capacity, road-dependent speed, ambush-vulnerable"
+  source: "PRD.md:Section 9.2 Supply Movement"
+  layer: Systems
+  priority: P0
+
+TR-SYS-042:
+  description: "Helicopter supply: medium capacity, fast/direct, limited capacity, fuel cost"
+  source: "PRD.md:Section 9.2 Supply Movement"
+  layer: Systems
+  priority: P0
+
+TR-SYS-043:
+  description: "If road connects firebases, supply flows automatically between them"
+  source: "PRD.md:Section 9.3 Supply Flow"
+  layer: Systems
+  priority: P0
+
+TR-SYS-044:
+  description: "Truck convoy logic: spawn at depot, follow roads, deliver, return"
+  source: "GAME_BIBLE.md:Phase 3"
+  layer: Systems
+  priority: P0
+
+TR-SYS-045:
+  description: "Helicopter logic: spawn at airstrip/rear LZ, fly to firebase LZ, deliver/load, return"
+  source: "GAME_BIBLE.md:Phase 3"
+  layer: Systems
+  priority: P0
+
+TR-SYS-046:
+  description: "Supply consumption: ammo (shooting), construction (building costs), reinforcements (arrivals)"
+  source: "GAME_BIBLE.md:Phase 3"
+  layer: Systems
+  priority: P0
+
+TR-SYS-047:
+  description: "Supply costs: squad ammo refill 10, squad water refill 5, buildings vary, reinforcements vary"
+  source: "PRD.md:Section 9.4 Supply Consumption"
+  layer: Systems
+  priority: P1
+
+# Reinforcement System (Pillar 4: Doctrine Over Spam)
+
+TR-SYS-050:
+  description: "No Age of Empires-style unit production at firebases"
+  source: "GAME_BIBLE.md:D-101"
+  layer: Systems
+  priority: P0
+
+TR-SYS-051:
+  description: "Reinforcements arrive via helicopter or convoy from off-map supply chain"
+  source: "GAME_BIBLE.md:D-101"
+  layer: Systems
+  priority: P0
+
+TR-SYS-052:
+  description: "Reinforcement timing: infantry 3-5 min, armor 10-15 min, specialists 5-7 min (placeholder)"
+  source: "GAME_BIBLE.md:D-901"
+  layer: Systems
+  priority: P1
+
+TR-SYS-053:
+  description: "Lose a unit and wait minutes for replacement - force preservation matters"
+  source: "GAME_BIBLE.md:D-101"
+  layer: Systems
+  priority: P0
+
+TR-SYS-054:
+  description: "Deck cards determine available unit types and required buildings"
+  source: "GAME_BIBLE.md:D-105"
+  layer: Systems
+  priority: P0
+
+TR-SYS-055:
+  description: "Unit card auto-includes required buildings (tank card -> tank revetment)"
+  source: "GAME_BIBLE.md:D-105"
+  layer: Systems
+  priority: P0
+
+TR-SYS-056:
+  description: "4-6 flexible building slots from doctrine-determined pool"
+  source: "GAME_BIBLE.md:D-105"
+  layer: Systems
+  priority: P0
+
+# Doctrine System (Pillar 4: Doctrine Over Spam)
+
+TR-SYS-060:
+  description: "Pre-mission doctrine choice commits playstyle, unit availability, and building unlocks"
+  source: "PRD.md:Section 13.1 How Doctrines Work"
+  layer: Systems
+  priority: P0
+
+TR-SYS-061:
+  description: "Air Cavalry: infantry + helis, limited ground vehicles, faster heli reinforcement (20%)"
+  source: "PRD.md:Section 13.3 Air Cavalry"
+  layer: Systems
+  priority: P0
+
+TR-SYS-062:
+  description: "Mechanized Infantry: more armor, fewer helis, faster convoy reinforcement (25%)"
+  source: "PRD.md:Section 13.3 Mechanized Infantry"
+  layer: Systems
+  priority: P1
+
+TR-SYS-063:
+  description: "VC Local Force: tunnels, night bonus (+25%), attrition tactics"
+  source: "PRD.md:Section 13.4 VC Local Force"
+  layer: Systems
+  priority: P0
+
+TR-SYS-064:
+  description: "MVP: 1 doctrine per side fully fleshed out (Air Cavalry for US, Local Force for VC)"
+  source: "GAME_BIBLE.md:D-105"
+  layer: Systems
+  priority: P0
+
+# Weather System (POST-MVP - Parked)
+
+TR-SYS-070:
+  description: "[POST-MVP] Day/night cycle with compressed time (1 real min = 10-15 game min)"
+  source: "PRD.md:Section 17.1 Day/Night Cycle"
+  layer: Systems
+  priority: P2
+
+TR-SYS-071:
+  description: "[POST-MVP] Night visibility reduced 60%, VC attack bonus +25%"
+  source: "PRD.md:Section 17.1 Day/Night Cycle"
+  layer: Systems
+  priority: P2
+
+TR-SYS-072:
+  description: "[POST-MVP] Weather types: Clear, Overcast, Light Rain, Heavy Rain, Monsoon Storm, Fog"
+  source: "PRD.md:Section 17.4 Weather Types"
+  layer: Systems
+  priority: P2
+
+TR-SYS-073:
+  description: "[POST-MVP] Monsoon storm: 50% movement, 25% visibility, helicopters grounded"
+  source: "PRD.md:Section 17.4 Weather Types"
+  layer: Systems
+  priority: P2
+
+TR-SYS-074:
+  description: "[POST-MVP] AI Director uses weather for attack timing (VC attacks more in storms)"
+  source: "PRD.md:Section 17.6 Tactical Weather Implications"
+  layer: Systems
+  priority: P2
+
+# Airstrip System
+
+TR-SYS-080:
+  description: "Airstrips are map features, not buildings - captured or start controlled"
+  source: "GAME_BIBLE.md:D-104"
+  layer: Systems
+  priority: P0
+
+TR-SYS-081:
+  description: "Lost airstrip = no fixed-wing supply or air strikes from that base"
+  source: "GAME_BIBLE.md:D-104"
+  layer: Systems
+  priority: P0
+
+TR-SYS-082:
+  description: "VC sappers can crater runways, grounding aircraft until engineer repair"
+  source: "GAME_BIBLE.md:D-104"
+  layer: Systems
+  priority: P0
+
+TR-SYS-083:
+  description: "Runway crater repair is an engineer task with specific build time"
+  source: "GAME_BIBLE.md:D-104"
+  layer: Systems
+  priority: P1
+
+# Tunnel System (VC asymmetry)
+
+TR-SYS-090:
+  description: "Tunnel entrances spawn VC units until found and destroyed"
+  source: "GAME_BIBLE.md:D-202"
+  layer: Systems
+  priority: P0
+
+TR-SYS-091:
+  description: "Tunnel entrances are hidden until spotted"
+  source: "GAME_BIBLE.md:MVP VC Buildings"
+  layer: Systems
+  priority: P0
+
+# Village System
+
+TR-SYS-095:
+  description: "Villages pre-placed on map with allegiance (neutral in MVP)"
+  source: "GAME_BIBLE.md:D-202"
+  layer: Systems
+  priority: P1
+
+TR-SYS-096:
+  description: "Village allegiance affects whether VC can stage from them"
+  source: "GAME_BIBLE.md:D-202"
+  layer: Systems
+  priority: P1
+
+TR-SYS-097:
+  description: "[POST-MVP] Civic action mechanics for allegiance shifts"
+  source: "GAME_BIBLE.md:D-202"
+  layer: Systems
+  priority: P2
+
+---
+# =============================================================================
+# CONTENT LAYER - Units, Factions, Maps, Buildings
+# =============================================================================
+
+# Faction Architecture
+
+TR-CNT-001:
+  description: "All units, buildings, systems carry faction enum (US_ARMY, VC, etc.)"
+  source: "GAME_BIBLE.md:D-303"
+  layer: Content
+  priority: P0
+
+TR-CNT-002:
+  description: "No hardcoded references to trucks or helipads in faction-agnostic code"
+  source: "GAME_BIBLE.md:D-303"
+  layer: Content
+  priority: P0
+
+TR-CNT-003:
+  description: "US and VC play fundamentally different games - asymmetric design"
+  source: "GAME_BIBLE.md:D-003"
+  layer: Content
+  priority: P0
+
+TR-CNT-004:
+  description: "VC playable in skirmish from MVP; VC campaign post-MVP"
+  source: "GAME_BIBLE.md:D-003"
+  layer: Content
+  priority: P0
+
+# MVP Unit Roster (6 US + 4 VC)
+
+TR-CNT-010:
+  description: "US Rifle Squad: 10 soldiers, M16+M60+M79, 3 min reinforcement time"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-011:
+  description: "US Engineer Squad: 8 soldiers, det-cord, mediocre combat, 4 min reinforcement"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-012:
+  description: "US Weapons Squad: 8 soldiers, M2 .50cal or 81mm mortar, 5 min reinforcement"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-013:
+  description: "US Recon Team: 4 soldiers, stealth-focused, extended sight, 3 min reinforcement"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-014:
+  description: "US M48 Patton: tank, requires tank revetment, 12 min reinforcement"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-015:
+  description: "US Huey Transport (UH-1D): transports 1 squad, delivers supplies, 6 min reinforcement"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-016:
+  description: "US Huey Gunship (UH-1B): called-in air asset, 90s cooldown, 4 uses per mission"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-020:
+  description: "VC Infantry: light infantry, AK-47, spawns from tunnels/map edges"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-021:
+  description: "VC Sappers: infiltrators, bypass wire/mines, target structures"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-022:
+  description: "VC Mortar Team: 60mm mortar, hit-and-run tactics"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-023:
+  description: "VC Porter: supply carriers, non-combat, target for player"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-024:
+  description: "Non-combat vehicles: M35 truck (convoy), D7 bulldozer (road grading)"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+# MVP Building Roster (10 US + 4 VC)
+
+TR-CNT-030:
+  description: "US Command Post: starting HQ, destroy = game over"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-031:
+  description: "US Sandbag Wall: free, fast build, basic cover, drag-paint"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-032:
+  description: "US Wire Obstacle: cheap, fast build, slows enemy, channels attacks"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-033:
+  description: "US Foxhole: free, fast build, infantry fighting position"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-034:
+  description: "US Bunker: medium cost, moderate build, heavy cover, garrison 1 squad"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-035:
+  description: "US MG Nest: medium cost, moderate build, auto-fires arc, suppresses"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-036:
+  description: "US Mortar Pit: heavy cost, slow build, indirect fire, player or auto"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-037:
+  description: "US Supply Depot: medium cost, moderate build, stores supplies, resupplies nearby"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-038:
+  description: "US Helipad: heavy cost, slow build, LZ for incoming helicopters"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-039:
+  description: "US Observation Tower: medium cost, moderate build, extended sight, spots for mortars"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-040:
+  description: "VC Tunnel Entrance: spawn point, hidden until spotted"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-041:
+  description: "VC Spider Hole: single-soldier ambush position, very hard to see"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-042:
+  description: "VC Weapon Cache: resupply point, finite"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+TR-CNT-043:
+  description: "VC Punji Trap: cheap damage trap, one-use"
+  source: "GAME_BIBLE.md:MVP Rosters"
+  layer: Content
+  priority: P0
+
+# Map Requirements
+
+TR-CNT-050:
+  description: "MVP map: ~2 km squared, mixed terrain (jungle, hills, river, road, airstrip, village)"
+  source: "GAME_BIBLE.md:MVP Vertical Slice"
+  layer: Content
+  priority: P0
+
+TR-CNT-051:
+  description: "Full game: 2-9 km squared maps, multi-firebase scale"
+  source: "GAME_BIBLE.md:D-001"
+  layer: Content
+  priority: P1
+
+TR-CNT-052:
+  description: "Campaign uses single persistent map expanding from 100m to 3km over 8-10 missions"
+  source: "PRD.md:Section 14.1 Persistent Expanding Map"
+  layer: Content
+  priority: P0
+
+TR-CNT-053:
+  description: "All terrain modifications persist between missions (roads, craters, cleared jungle)"
+  source: "GAME_BIBLE.md:D-305"
+  layer: Content
+  priority: P0
+
+TR-CNT-054:
+  description: "All constructed bases persist between missions"
+  source: "GAME_BIBLE.md:D-305"
+  layer: Content
+  priority: P0
+
+TR-CNT-055:
+  description: "TerrainEngine chunks unlock progressively as campaign expands"
+  source: "GAME_BIBLE.md:D-305"
+  layer: Content
+  priority: P0
+
+# Visual Style
+
+TR-CNT-060:
+  description: "Early-2000s RTS aesthetic: mid-poly, hand-painted textures, real lighting"
+  source: "GAME_BIBLE.md:D-005"
+  layer: Content
+  priority: P0
+
+TR-CNT-061:
+  description: "Visual references: C&C Generals (2003), Rome: Total War (2004), Battlefield Vietnam (2004)"
+  source: "GAME_BIBLE.md:D-005"
+  layer: Content
+  priority: P1
+
+TR-CNT-062:
+  description: "Target: ~1500-3000 tris per unit, ~512px hand-painted diffuse textures"
+  source: "GAME_BIBLE.md:D-005"
+  layer: Content
+  priority: P1
+
+TR-CNT-063:
+  description: "NOT PS1 retro, NOT voxel, NOT pixel art, NOT photorealistic"
+  source: "GAME_BIBLE.md:D-005"
+  layer: Content
+  priority: P0
+
+TR-CNT-064:
+  description: "At extreme zoom-out: units render as NATO-style markers"
+  source: "PRD.md:Section 18.1 Camera"
+  layer: Content
+  priority: P0
+
+---
+# =============================================================================
+# UI/UX REQUIREMENTS
+# =============================================================================
+
+TR-UIX-001:
+  description: "Seamless strategic zoom: one view from ~10m to ~500m altitude"
+  source: "PRD.md:Section 18.1 Camera"
+  layer: Systems
+  priority: P0
+
+TR-UIX-002:
+  description: "WASD/Arrow pan + edge scroll for camera movement"
+  source: "PRD.md:Section 18.1 Camera"
+  layer: Systems
+  priority: P0
+
+TR-UIX-003:
+  description: "Mouse wheel zoom (smooth transition)"
+  source: "PRD.md:Section 18.1 Camera"
+  layer: Systems
+  priority: P0
+
+TR-UIX-004:
+  description: "Q/E rotate camera"
+  source: "PRD.md:Section 18.1 Camera"
+  layer: Systems
+  priority: P0
+
+TR-UIX-005:
+  description: "Focus on selection (center camera on selected units)"
+  source: "PRD.md:Section 18.1 Camera"
+  layer: Systems
+  priority: P0
+
+TR-UIX-006:
+  description: "Box select (drag rectangle), click select, double-click selects all of type on screen"
+  source: "PRD.md:Section 18.2 Selection"
+  layer: Systems
+  priority: P0
+
+TR-UIX-007:
+  description: "Control groups: Ctrl+1-9 to save, 1-9 to recall"
+  source: "PRD.md:Section 18.2 Selection"
+  layer: Systems
+  priority: P0
+
+TR-UIX-008:
+  description: "HUD elements: minimap, supply indicator, reinforcement clock, unit resource icons, mission objectives"
+  source: "PRD.md:Section 18.4 HUD Elements"
+  layer: Systems
+  priority: P0
+
+TR-UIX-009:
+  description: "Satellite view: terrain visible everywhere, enemies only when spotted"
+  source: "PRD.md:Section 18.5 Map Visibility"
+  layer: Systems
+  priority: P0
+
+TR-UIX-010:
+  description: "Pause and issue orders (full control while paused)"
+  source: "PRD.md:Section 18.6 Accessibility Features"
+  layer: Systems
+  priority: P0
+
+TR-UIX-011:
+  description: "Speed controls: slow down or speed up game time"
+  source: "PRD.md:Section 18.6 Accessibility Features"
+  layer: Systems
+  priority: P1
+
+---
+# =============================================================================
+# DESIGN DECISIONS FROM GAME_BIBLE.md (D-XXX Reference)
+# =============================================================================
+
+# Vision-Level Decisions (D-001 to D-005)
+
+DD-001:
+  decision_id: "D-001"
+  title: "Multi-firebase strategic scale"
+  status: "LOCKED"
+  description: "Multi-firebase network across AO, 45-90+ min missions, 2-9 km2 maps, 40-80+ units"
+  source: "GAME_BIBLE.md:D-001"
+
+DD-002:
+  decision_id: "D-002"
+  title: "MVP is two firebases"
+  status: "LOCKED"
+  description: "One main + one forward outpost, linked by road, ~2km2 map"
+  source: "GAME_BIBLE.md:D-002"
+
+DD-003:
+  decision_id: "D-003"
+  title: "VC fully asymmetric faction"
+  status: "LOCKED"
+  description: "Different mechanics for force gen, logistics, win conditions. Playable in skirmish MVP."
+  source: "GAME_BIBLE.md:D-003"
+
+DD-004:
+  decision_id: "D-004"
+  title: "Hybrid historical/fictional campaign"
+  status: "LOCKED"
+  description: "Fictional unit in real geographic AOs, inspired by real operations"
+  source: "GAME_BIBLE.md:D-004"
+
+DD-005:
+  decision_id: "D-005"
+  title: "Early-2000s RTS aesthetic"
+  status: "LOCKED"
+  description: "Mid-poly, hand-painted, not PS1 retro, not photorealistic"
+  source: "GAME_BIBLE.md:D-005"
+
+# Core Loop Decisions (D-101 to D-106)
+
+DD-101:
+  decision_id: "D-101"
+  title: "No AoE-style unit production"
+  status: "LOCKED"
+  description: "Reinforcements via helicopter/convoy only, minutes not seconds"
+  source: "GAME_BIBLE.md:D-101"
+
+DD-102:
+  decision_id: "D-102"
+  title: "Engineer auto-build zones"
+  status: "LOCKED"
+  description: "Auto inside established zones, manual outside"
+  source: "GAME_BIBLE.md:D-102"
+
+DD-103:
+  decision_id: "D-103"
+  title: "Det-cord vs bulldozers"
+  status: "LOCKED"
+  description: "Two distinct terrain-clearing tools with different use cases"
+  source: "GAME_BIBLE.md:D-103"
+
+DD-104:
+  decision_id: "D-104"
+  title: "Airstrips as map features"
+  status: "LOCKED"
+  description: "Captured, not built. Can be cratered and repaired."
+  source: "GAME_BIBLE.md:D-104"
+
+DD-105:
+  decision_id: "D-105"
+  title: "Deck cards + flexible slots"
+  status: "LOCKED"
+  description: "Unit cards auto-include buildings, 4-6 flexible building slots"
+  source: "GAME_BIBLE.md:D-105"
+
+DD-106:
+  decision_id: "D-106"
+  title: "Save system architecture"
+  status: "LOCKED"
+  description: "Implementation parked, but serialize-friendly patterns required now"
+  source: "GAME_BIBLE.md:D-106"
+
+# Technical Decisions (D-301 to D-305)
+
+DD-301:
+  decision_id: "D-301"
+  title: "Codebase cleanup before features"
+  status: "LOCKED"
+  description: "Archive old code, resolve collisions, normalize line endings"
+  source: "GAME_BIBLE.md:D-301"
+
+DD-302:
+  decision_id: "D-302"
+  title: "BaseStructure extends StaticBody3D"
+  status: "LOCKED"
+  description: "Building inheritance pattern locked"
+  source: "GAME_BIBLE.md:D-302"
+
+DD-303:
+  decision_id: "D-303"
+  title: "Faction-parameterized everything"
+  status: "LOCKED"
+  description: "All systems carry faction enum, no hardcoded US assumptions"
+  source: "GAME_BIBLE.md:D-303"
+
+DD-304:
+  decision_id: "D-304"
+  title: "TerrainEngine integration"
+  status: "LOCKED"
+  description: "3km x 3km chunked streaming with domain warping"
+  source: "GAME_BIBLE.md:D-304"
+
+DD-305:
+  decision_id: "D-305"
+  title: "Persistent expanding map campaign"
+  status: "LOCKED"
+  description: "Single map expands over 10 missions, all modifications persist"
+  source: "GAME_BIBLE.md:D-305"
+
+# Deferred Decisions (D-901 to D-906)
+
+DD-901:
+  decision_id: "D-901"
+  title: "Reinforcement timing values"
+  status: "REVISIT"
+  description: "Placeholder: 3-5 min infantry, 10-15 min armor. Tune via playtest."
+  source: "GAME_BIBLE.md:D-901"
+
+DD-902:
+  decision_id: "D-902"
+  title: "MVP map size"
+  status: "REVISIT"
+  description: "~2km2 target, smaller acceptable for first playable"
+  source: "GAME_BIBLE.md:D-902"
+
+DD-903:
+  decision_id: "D-903"
+  title: "Co-op architecture"
+  status: "PARKING_LOT"
+  description: "Defer until MVP ships"
+  source: "GAME_BIBLE.md:D-903"
+
+DD-904:
+  decision_id: "D-904"
+  title: "Civilian representation"
+  status: "REVISIT"
+  description: "Defer until village system integration"
+  source: "GAME_BIBLE.md:D-904"
+
+DD-905:
+  decision_id: "D-905"
+  title: "Audio direction"
+  status: "REVISIT"
+  description: "Out of scope until Volume 7"
+  source: "GAME_BIBLE.md:D-905"
+
+DD-906:
+  decision_id: "D-906"
+  title: "Final game title"
+  status: "REVISIT"
+  description: "RealVietnamRTS is working title"
+  source: "GAME_BIBLE.md:D-906"
+
+---
+# =============================================================================
+# EXPLICIT MVP EXCLUSIONS (Do Not Implement)
+# =============================================================================
+
+EXCL-001:
+  item: "Weather system"
+  status: "Archived for post-MVP"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-002:
+  item: "Strategic air strikes (Napalm, Arc Light, Spooky, Skyraider)"
+  status: "Parked"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-003:
+  item: "Village civic action / allegiance shifts"
+  status: "Allegiance stays static at neutral"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-004:
+  item: "Civilian representation"
+  status: "Excluded"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-005:
+  item: "SOG long-range recon"
+  status: "Archived"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-006:
+  item: "Mid-mission saves"
+  status: "Architect only, no implementation"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-007:
+  item: "Multi-mission campaign chain"
+  status: "Post-MVP"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-008:
+  item: "Multiplayer / co-op"
+  status: "Excluded"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-009:
+  item: "Map editor / mod support"
+  status: "Excluded"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-010:
+  item: "Cobra gunships, Chinooks, additional helicopter types"
+  status: "Excluded"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-011:
+  item: "ARVN allied units"
+  status: "Excluded"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-012:
+  item: "NVA conventional armor (PT-76, T-54)"
+  status: "Excluded"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-013:
+  item: "AAA emplacements"
+  status: "Excluded"
+  source: "GAME_BIBLE.md:Section 12"
+
+EXCL-014:
+  item: "Tank-on-tank combat"
+  status: "M48 exists to wreck infantry only"
+  source: "GAME_BIBLE.md:Section 12"
+
+---
+# =============================================================================
+# SIX PILLARS TRACEABILITY MATRIX
+# =============================================================================
+
+PILLAR-1:
+  name: "Carve the Map"
+  description: "Terrain is opaque until cleared. Bulldozers cut roads, engineers use det-cord."
+  requirements:
+    - TR-SYS-001
+    - TR-SYS-002
+    - TR-SYS-003
+    - TR-SYS-007
+    - TR-SYS-008
+    - TR-SYS-009
+    - TR-SYS-010
+
+PILLAR-2:
+  name: "Network of Firebases"
+  description: "Build interlocking forward positions with LZs and road links."
+  requirements:
+    - TR-SYS-020
+    - TR-SYS-021
+    - TR-SYS-022
+    - TR-SYS-023
+    - TR-SYS-025
+    - TR-SYS-026
+    - TR-SYS-030
+    - TR-SYS-031
+    - TR-CNT-030
+    - TR-CNT-031
+    - TR-CNT-034
+
+PILLAR-3:
+  name: "Physical Supply Chains"
+  description: "Trucks on roads, helicopters to LZs. Supply is spatial and attackable."
+  requirements:
+    - TR-SYS-040
+    - TR-SYS-041
+    - TR-SYS-042
+    - TR-SYS-043
+    - TR-SYS-044
+    - TR-SYS-045
+    - TR-SYS-046
+    - TR-COR-020
+    - TR-COR-021
+    - TR-COR-023
+
+PILLAR-4:
+  name: "Doctrine Over Spam"
+  description: "Pre-mission deck commits force composition. Reinforcements arrive over minutes."
+  requirements:
+    - TR-SYS-050
+    - TR-SYS-051
+    - TR-SYS-052
+    - TR-SYS-053
+    - TR-SYS-054
+    - TR-SYS-060
+    - TR-SYS-061
+    - TR-SYS-063
+
+PILLAR-5:
+  name: "The War Continues"
+  description: "Patrols run on standing orders. Defenses auto-fire. You command operations."
+  requirements:
+    - TR-COR-005
+    - TR-COR-007
+    - TR-SYS-021
+    - TR-SYS-043
+    - TR-COR-040
+    - TR-COR-041
+    - TR-COR-042
+
+PILLAR-6:
+  name: "Persistent Expanding Map"
+  description: "Single map expands each mission. All terrain modifications persist."
+  requirements:
+    - TR-CNT-052
+    - TR-CNT-053
+    - TR-CNT-054
+    - TR-CNT-055
+    - TR-FND-013
+    - TR-FND-014
+    - TR-FND-015
+
+---
+# =============================================================================
+# SUMMARY STATISTICS
+# =============================================================================
+
+summary:
+  total_requirements: 134
+  by_layer:
+    Foundation: 20
+    Core: 31
+    Systems: 57
+    Content: 26
+  by_priority:
+    P0_critical: 89
+    P1_important: 31
+    P2_deferred: 14
+  design_decisions_locked: 12
+  design_decisions_deferred: 5
+  exclusions: 14
+  pillars_traced: 6
