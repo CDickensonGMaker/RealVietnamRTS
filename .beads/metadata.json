@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "RealVietnamRTS",
+  "project_id": "b3984f7f-afb7-4e97-9bbb-a88cb3eb0580"
+}
