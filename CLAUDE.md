@@ -409,10 +409,10 @@ SelectionManager raycasts with mask `0b1110` (layers 2,3,4) for unit selection.
 4. **Model loads offset** - Use `SelectableUnitSetup.sync_visual_to_collision()`
 
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
+<!-- BEGIN BEADS INTEGRATION v:2 profile:minimal hash:auto -->
 ## Beads Issue Tracker
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+This project uses **bd (beads)** for issue tracking. Beads integration is **AUTOMATIC** - Claude MUST run session protocols without being asked.
 
 ### Quick Reference
 
@@ -421,38 +421,43 @@ bd ready              # Find available work
 bd show <id>          # View issue details
 bd update <id> --claim  # Claim work
 bd close <id>         # Complete work
+bd remember "context" # Persist knowledge across sessions
 ```
 
 ### Rules
 
 - Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+## Session Start (AUTOMATIC)
 
-## Session Completion
+**At the START of every session**, Claude MUST automatically run:
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+```bash
+bd ready              # Show open tasks awaiting work
+```
 
-**MANDATORY WORKFLOW:**
+This is NOT optional. Do this immediately when the session begins, before any other work. Show the user what tasks are available.
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+## Session End (AUTOMATIC)
+
+**When the user says they are signing off, ending the session, or similar**, Claude MUST automatically:
+
+1. **Create issues for incomplete work** - `bd create "title" -d "description" -l "labels"`
+2. **Close completed issues** - `bd update <id> --status closed`
+3. **Save context** - `bd remember "key decisions and state for next session"`
+4. **Commit and push**:
    ```bash
-   git pull --rebase
+   git add <relevant-files>
+   git commit -m "description"
    git push
-   git status  # MUST show "up to date with origin"
    ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+5. **Show summary** - List issues created/closed and what was pushed
 
 **CRITICAL RULES:**
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
+- These session protocols are AUTOMATIC - do not wait for user to ask
 <!-- END BEADS INTEGRATION -->
