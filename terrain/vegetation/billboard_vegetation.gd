@@ -3,6 +3,12 @@ class_name BillboardVegetation
 ## Billboard vegetation system for mid-distance tree rendering
 ## Uses 5 intersecting quads (cross/star formation) for 3D depth illusion
 ## Provides LOD between full 3D trees and distant fog
+##
+## NOTE: Billboard system is DISABLED by default - using 3D tree models only.
+## Set enabled = true to re-enable billboard rendering.
+
+## Master enable flag - set to false to disable all billboard rendering
+var enabled: bool = false
 
 ## Billboard LOD distances - billboards fill in the "jungle edge" beyond 3D trees
 ## 3D trees: visible 0-200m, hidden >250m (VegetationLODManager)
@@ -76,12 +82,17 @@ func _ready() -> void:
 	_density_noise.frequency = 0.005
 	_density_noise.seed = 12345
 
+	# Skip texture/mesh loading when disabled to prevent wasted resources
+	# This was causing unnecessary texture loads even when billboards were off
+	if not enabled:
+		return
+
 	_load_billboard_textures()
 	_create_billboard_meshes()
 
 
 func _process(delta: float) -> void:
-	if not _camera:
+	if not enabled or not _camera:
 		return
 
 	_lod_accumulator += delta
@@ -247,6 +258,9 @@ func _create_billboard_meshes() -> void:
 ## Generate billboards for a chunk
 ## Uses placement cache pattern to prevent tree teleportation on regen
 func generate_for_chunk(coord: Vector2i, heightmap: Object, vegetation_terrain: PackedByteArray) -> void:
+	# Billboard system disabled - using 3D trees only
+	if not enabled:
+		return
 	if _tree_meshes.is_empty():
 		return
 

@@ -50,7 +50,7 @@ var _bridge_rotation_y: float = 0.0  # Rotation for bridge span direction
 var _bridge_span_start: Vector3 = Vector3.ZERO
 var _bridge_span_end: Vector3 = Vector3.ZERO
 
-## Arc rotation (right-click to anchor, then mouse movement rotates facing)
+## Arc rotation (left-click to anchor, then mouse movement rotates facing, left-click to confirm)
 var _arc_facing: float = 0.0  # Current facing direction in degrees (0 = north/+Z)
 var _arc_anchored: bool = false  # True after right-click anchors position for rotation
 var _arc_anchor_pos: Vector3 = Vector3.ZERO  # World position where building is anchored
@@ -199,24 +199,10 @@ func handle_input(event: InputEvent, world_pos: Vector3) -> bool:
 			_handle_left_click(world_pos)
 			return true  # Always consume, even if validation fails
 
-		# Right-click: arc anchor (for directional weapons) or cancel placement
-		if mouse_event.button_index == MOUSE_BUTTON_RIGHT:
-			if _is_arc_building() and mouse_event.pressed:
-				if not _arc_anchored:
-					# First right-click: anchor position and enter rotation mode
-					_arc_anchored = true
-					_arc_anchor_pos = _cursor_world_pos
-					print("[PlacementController] Arc building anchored at %v - move mouse to set facing" % _arc_anchor_pos)
-				else:
-					# Second right-click while anchored: cancel and un-anchor
-					_arc_anchored = false
-					_arc_anchor_pos = Vector3.ZERO
-					print("[PlacementController] Arc anchor cancelled")
-				return true
-			elif not _is_arc_building() and mouse_event.pressed:
-				# Non-arc building: cancel on press
-				cancel_placement()
-				return true
+		# Right-click: always cancel placement (consistent RTS UX - right-click = cancel/orders)
+		if mouse_event.button_index == MOUSE_BUTTON_RIGHT and mouse_event.pressed:
+			cancel_placement()
+			return true
 
 	# Key events
 	if event is InputEventKey:
@@ -378,11 +364,15 @@ func _calculate_linear_segments(start: Vector3, end: Vector3) -> void:
 	if segment_length <= 0:
 		segment_length = 3.0  # Default
 
+	# Tighten spacing to close visual gaps between segments
+	# The footprint is the collision size; visual models are slightly smaller
+	var segment_spacing: float = segment_length * 0.85
+
 	var direction := (end - start)
 	direction.y = 0  # Keep on horizontal plane
 	var total_length := direction.length()
 
-	if total_length < segment_length * 0.5:
+	if total_length < segment_spacing * 0.5:
 		return  # Too short for any segments
 
 	direction = direction.normalized()
@@ -392,10 +382,10 @@ func _calculate_linear_segments(start: Vector3, end: Vector3) -> void:
 	# atan2(x, z) gives the drag direction; add PI/2 to face perpendicular
 	_linear_rotation_y = atan2(direction.x, direction.z) + PI / 2.0
 
-	var count := int(total_length / segment_length)
+	var count := int(total_length / segment_spacing)
 
 	for i in range(count):
-		var pos := start + direction * (segment_length * (i + 0.5))
+		var pos := start + direction * (segment_spacing * (i + 0.5))
 		# Snap to terrain height
 		if _terrain and _terrain.has_method("get_height_at"):
 			pos.y = _terrain.get_height_at(pos)
@@ -416,9 +406,9 @@ func _validate_linear_segments() -> void:
 		var result: Dictionary
 
 		if _job_system.has_method("validate_placement_real_time"):
-			result = _job_system.validate_placement_real_time(pos, footprint, _current_building_type)
+			result = _job_system.validate_placement_real_time(pos, footprint, _current_building_type, _linear_rotation_y)
 		else:
-			result = _job_system.validate_placement(pos, footprint, _current_building_type)
+			result = _job_system.validate_placement(pos, footprint, _current_building_type, _linear_rotation_y)
 
 		var is_valid: bool = result.get("valid", false)
 		_linear_valid_segments[i] = is_valid
@@ -531,14 +521,23 @@ func _commit_linear_placement() -> bool:
 ## =============================================================================
 
 func _handle_left_click(position: Vector3) -> bool:
-	"""Handle left-click during placement"""
+	"""Handle left-click during placement.
+	   For arc buildings (MG nest, mortar pit): first click anchors, second click confirms.
+	   For other buildings: single click places."""
 	match state:
 		State.SINGLE_PLACING:
-			# For arc buildings: if anchored, commit at anchor position
-			# Otherwise, just a regular commit
-			if _arc_anchored and _is_arc_building():
-				return _commit_single_placement(_arc_anchor_pos)
+			if _is_arc_building():
+				if not _arc_anchored:
+					# First left-click: anchor position and enter rotation mode
+					_arc_anchored = true
+					_arc_anchor_pos = position
+					print("[PlacementController] Arc building anchored at %v - move mouse to aim, left-click to confirm" % _arc_anchor_pos)
+					return true
+				else:
+					# Second left-click: commit at anchor position with current facing
+					return _commit_single_placement(_arc_anchor_pos)
 			else:
+				# Non-arc building: immediate placement
 				return _commit_single_placement(position)
 
 		State.LINEAR_START:
@@ -606,7 +605,8 @@ func _is_arc_building() -> bool:
 
 func _update_arc_facing_from_cursor() -> void:
 	"""Update arc facing based on direction from anchored position to cursor.
-	   Called continuously while anchored to let user aim the weapon emplacement."""
+	   Called continuously after first left-click anchors position.
+	   User moves mouse to aim, then left-clicks again to confirm placement."""
 	if not _arc_anchored or not is_instance_valid(_ghost):
 		return
 
@@ -792,6 +792,12 @@ func _create_ghost_for_building() -> void:
 
 	_ghost.name = "PlacementGhost"
 	add_child(_ghost)
+
+	# Set influence radius for HQ buildings (TOC, Command Post)
+	# Shows the 150m firebase zone where other buildings can be placed
+	if _current_building_data.is_hq_building and _current_building_data.influence_radius > 0:
+		_ghost.set_influence_radius(_current_building_data.influence_radius)
+
 	_ghost.show_ghost()
 
 

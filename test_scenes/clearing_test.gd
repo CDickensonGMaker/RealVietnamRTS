@@ -36,8 +36,7 @@ var hud: Label
 var workers: Array[Node3D] = []
 # Ghost and mode state removed - now handled by BattleHUD/PlacementController
 
-## Supply tracking
-var current_supply: int = 2000  # Starting supply for full firebase construction
+## Supply tracking - now reads from SupplyManager autoload (single source of truth)
 
 ## Note: ground collision is provided by TerrainManager chunks via create_raycast_collision()
 
@@ -60,6 +59,10 @@ var tree_container: Node3D
 var tree_nodes: Array[Node3D] = []
 var trees_visible := true
 const TREE_DENSITY := 0.02  # Trees per square meter in heavy jungle
+
+## Trees indexed by bundle coordinate for O(1) lookup when clearing
+## Key: Vector2i bundle coord, Value: Array of tree Node3D
+var _trees_by_bundle: Dictionary = {}
 
 ## Vegetation chunks - cover the larger test area
 ## For 320m map with 64m chunks, need 5x5 chunk coverage
@@ -210,7 +213,9 @@ func _ready() -> void:
 
 	print("")
 	print("=== Battle Scene Ready ===")
-	print("Workers: 4 Engineers + 4 Bulldozers | Supply: %d" % current_supply)
+	var supply_mgr := get_node_or_null("/root/SupplyManager")
+	var supply_val: float = supply_mgr.get_global_supply() if supply_mgr else 0.0
+	print("Workers: 4 Engineers + 4 Bulldozers | Supply: %.0f" % supply_val)
 	print("")
 	print("=== BUILDING PLACEMENT ===")
 	print("1. Place TOC first (B menu) - it can be placed anywhere")
@@ -273,8 +278,9 @@ func _setup_local_terrain() -> void:
 	# Set camera for chunk streaming
 	local_terrain.set_camera(camera)
 
-	# Generate terrain synchronously (small map = fast)
-	local_terrain.generate_terrain(42)
+	# Generate terrain ASYNC to prevent window freeze
+	# NOTE: This was causing the "freeze after just a second" bug - missing await
+	await local_terrain.generate_terrain(42)
 
 	print("[ClearingTest] Local terrain ready (%.0fm, %d chunks, height 0-%.0fm)" % [
 		MAP_SIZE,
@@ -656,8 +662,19 @@ func _setup_3d_trees() -> void:
 			tree_nodes.append(tree)
 			tree_count += 1
 
+			# Index tree by bundle coordinate for O(1) clearing lookup
+			var bundle_meters: float = vegetation_manager.bundle_meters if vegetation_manager else 8.0
+			var bundle_x: int = int(pos.x / bundle_meters)
+			var bundle_z: int = int(pos.z / bundle_meters)
+			var bundle_coord := Vector2i(bundle_x, bundle_z)
+			if not _trees_by_bundle.has(bundle_coord):
+				_trees_by_bundle[bundle_coord] = []
+			_trees_by_bundle[bundle_coord].append(tree)
+			# Store bundle coord in tree metadata for later reference
+			tree.set_meta("bundle_coord", bundle_coord)
+
 	tree_container.visible = trees_visible
-	print("[ClearingTest] Spawned %d light trees (natural sporadic pattern, T to toggle)" % tree_count)
+	print("[ClearingTest] Spawned %d light trees indexed into %d bundles" % [tree_count, _trees_by_bundle.size()])
 
 	# Register all trees with LOD manager for distance culling
 	# Note: lod_manager already retrieved at start of function
@@ -673,6 +690,33 @@ func _set_chunk_heavy_jungle(chunk_coord: Vector2i) -> void:
 			terrain[i] = VegetationManager.TerrainType.HEAVY_JUNGLE
 		vegetation_manager._chunk_terrain[chunk_coord] = terrain
 		print("[ClearingTest] Set all bundles to HEAVY_JUNGLE")
+
+
+## Remove all 3D trees in a specific bundle coordinate.
+## Returns the number of trees removed.
+func _remove_trees_in_bundle(bundle_coord: Vector2i) -> int:
+	if not _trees_by_bundle.has(bundle_coord):
+		return 0
+
+	var trees_in_bundle: Array = _trees_by_bundle[bundle_coord]
+	var removed_count: int = trees_in_bundle.size()
+
+	for tree in trees_in_bundle:
+		if is_instance_valid(tree):
+			# Remove from global tree_nodes array
+			var idx: int = tree_nodes.find(tree)
+			if idx >= 0:
+				tree_nodes.remove_at(idx)
+			# Queue tree for deletion
+			tree.queue_free()
+
+	# Clear the bundle entry
+	_trees_by_bundle.erase(bundle_coord)
+
+	if removed_count > 0:
+		print("[ClearingTest] Removed %d trees from bundle %s" % [removed_count, bundle_coord])
+
+	return removed_count
 
 
 # _setup_area_preview removed - ghosts now handled by PlacementController via BattleHUD
@@ -1061,8 +1105,9 @@ func _on_clearing_vegetation_updated(region: Rect2i) -> void:
 	var region_max_x: float = (region.position.x + region.size.x) * cell_size
 	var region_max_z: float = (region.position.y + region.size.y) * cell_size
 
-	# NOTE: 3D trees are felled individually by workers (WorkerController._process_chopping),
-	# so they are not batch-removed here. This only regenerates distant billboards.
+	# ALSO remove 3D trees in cleared bundles (previously only workers felled them)
+	# This ensures trees are removed when bundles are batch-cleared
+	var trees_removed := 0
 
 	# Update terrain data and regenerate billboards for affected chunks
 	var bundle_size: float = vegetation_manager.bundle_meters
@@ -1104,6 +1149,12 @@ func _on_clearing_vegetation_updated(region: Rect2i) -> void:
 							modified = true
 							billboards_cleared += 1
 
+							# ALSO remove 3D trees in this bundle
+							var global_bundle_x: int = int(bundle_center_x / bundle_size)
+							var global_bundle_z: int = int(bundle_center_z / bundle_size)
+							var bundle_coord := Vector2i(global_bundle_x, global_bundle_z)
+							trees_removed += _remove_trees_in_bundle(bundle_coord)
+
 		if modified:
 			vegetation_manager._chunk_terrain[chunk_coord] = terrain_data
 
@@ -1112,7 +1163,7 @@ func _on_clearing_vegetation_updated(region: Rect2i) -> void:
 		print("[ClearingTest] Regenerated billboards for chunk %s" % chunk_coord)
 
 	if billboards_cleared > 0:
-		print("[ClearingTest] Cleared %d billboard bundles" % billboards_cleared)
+		print("[ClearingTest] Cleared %d billboard bundles, removed %d 3D trees" % [billboards_cleared, trees_removed])
 
 	# Rebuild grid overlay
 	_rebuild_grid_overlay()
@@ -1173,9 +1224,13 @@ func _update_hud() -> void:
 		return
 
 	var job_system = get_node_or_null("/root/JobSystem")
+	var supply_mgr := get_node_or_null("/root/SupplyManager")
+	var supply_str: String = "N/A"
+	if supply_mgr and supply_mgr.has_method("get_global_supply"):
+		supply_str = "%.0f" % supply_mgr.get_global_supply()
 
 	var text := "=== Firebase Construction (320m) ===\n"
-	text += "Supply: %d | Map: %.0fm x %.0fm\n" % [current_supply, MAP_SIZE, MAP_SIZE]
+	text += "Supply: %s | Map: %.0fm x %.0fm\n" % [supply_str, MAP_SIZE, MAP_SIZE]
 
 	var engineers := 0
 	var bulldozers := 0

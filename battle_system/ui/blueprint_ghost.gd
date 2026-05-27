@@ -30,6 +30,11 @@ enum PlacementState {
 @export var arc_range: float = 500.0  # Weapon range in meters
 @export var arc_facing: float = 0.0  # Current facing direction in degrees (0 = north/+Z)
 
+## HQ Building Properties - influence radius circle (TOC, Command Post, etc.)
+@export var influence_radius: float = 0.0  # Firebase influence zone (150m for TOC)
+var _influence_mesh: MeshInstance3D  # Dashed circle showing build zone
+var _influence_material: StandardMaterial3D
+
 ## Visual settings
 const VALID_COLOR := Color(0.2, 0.9, 0.3, 0.35)      # Green, translucent
 const INVALID_COLOR := Color(0.9, 0.2, 0.2, 0.35)    # Red, translucent
@@ -48,6 +53,7 @@ var _segment_positions: Array[Vector3] = []
 var _segment_valid: Array[bool] = []
 var _segment_rotation: float = 0.0
 var _segment_size: Vector2 = Vector2(3.0, 1.0)  # Width x Depth of each segment
+var _model_rotation_offset: float = 0.0  # Additional rotation from model_rotation_y
 
 ## Visual components
 var _fill_mesh: MeshInstance3D
@@ -145,6 +151,15 @@ func _setup_materials() -> void:
 	_segment_invalid_material.render_priority = 17
 	_segment_invalid_material.albedo_color = Color(0.9, 0.2, 0.2, 0.6)  # Red, semi-opaque
 
+	# HQ Influence radius material - blue dashed circle on ground
+	_influence_material = StandardMaterial3D.new()
+	_influence_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_influence_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_influence_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_influence_material.no_depth_test = true
+	_influence_material.render_priority = 12  # Below building ghost
+	_influence_material.albedo_color = Color(0.3, 0.6, 1.0, 0.5)  # Blue, semi-transparent
+
 
 func _setup_meshes() -> void:
 	# Fill mesh
@@ -166,6 +181,12 @@ func _setup_meshes() -> void:
 	_segment_markers_node = Node3D.new()
 	_segment_markers_node.name = "SegmentMarkers"
 	add_child(_segment_markers_node)
+
+	# Influence radius mesh (for HQ buildings like TOC)
+	_influence_mesh = MeshInstance3D.new()
+	_influence_mesh.material_override = _influence_material
+	_influence_mesh.visible = false  # Only shown when influence_radius > 0
+	add_child(_influence_mesh)
 
 	# Build initial meshes
 	_rebuild_meshes()
@@ -462,11 +483,13 @@ func _create_line_grid(points: PackedVector3Array, width: float, spacing: float)
 ## valid_flags: per-segment validation (true = green, false = red)
 ## rotation_y: rotation in radians for all segments (from drag direction)
 ## segment_size: Vector2(width, depth) of each segment footprint
-func set_segment_markers(positions: Array[Vector3], valid_flags: Array[bool], rotation_y: float, segment_size: Vector2) -> void:
+## model_rotation_offset: additional rotation in radians from BuildingData.model_rotation_y
+func set_segment_markers(positions: Array[Vector3], valid_flags: Array[bool], rotation_y: float, segment_size: Vector2, model_rotation_offset: float = 0.0) -> void:
 	_segment_positions = positions
 	_segment_valid = valid_flags
 	_segment_rotation = rotation_y
 	_segment_size = segment_size
+	_model_rotation_offset = model_rotation_offset
 	_rebuild_segment_markers()
 
 
@@ -475,13 +498,29 @@ func clear_segment_markers() -> void:
 	_segment_positions.clear()
 	_segment_valid.clear()
 	_clear_segment_marker_meshes()
+	# Restore line mesh visibility
+	if is_instance_valid(_fill_mesh):
+		_fill_mesh.visible = true
+	if is_instance_valid(_outline_mesh):
+		_outline_mesh.visible = true
 
 
 func _rebuild_segment_markers() -> void:
 	_clear_segment_marker_meshes()
 
 	if _segment_positions.is_empty():
+		# Show line meshes when no segment markers
+		if is_instance_valid(_fill_mesh):
+			_fill_mesh.visible = true
+		if is_instance_valid(_outline_mesh):
+			_outline_mesh.visible = true
 		return
+
+	# Hide line meshes when segment markers are active (avoid double-line visual)
+	if is_instance_valid(_fill_mesh):
+		_fill_mesh.visible = false
+	if is_instance_valid(_outline_mesh):
+		_outline_mesh.visible = false
 
 	# Create a mesh instance for each segment
 	for i in range(_segment_positions.size()):
@@ -494,7 +533,8 @@ func _rebuild_segment_markers() -> void:
 		# Position in world space (markers are direct children, not offset by ghost position)
 		# The ghost itself is at world origin for LINE type, so we use world positions directly
 		marker.global_position = pos
-		marker.rotation.y = _segment_rotation
+		# Include model_rotation_offset so preview matches final model placement
+		marker.rotation.y = _segment_rotation + _model_rotation_offset
 
 		_segment_markers_node.add_child(marker)
 
@@ -646,18 +686,77 @@ func _create_circle_grid(radius: float) -> ArrayMesh:
 	return st.commit()
 
 
+## ==================== INFLUENCE RADIUS CIRCLE (HQ Buildings) ====================
+
+func set_influence_radius(radius: float) -> void:
+	"""Set influence radius for HQ buildings (TOC, Command Post).
+	   Shows a dashed circle on the ground indicating where other buildings can be placed."""
+	influence_radius = radius
+	_rebuild_influence_circle()
+
+
+func _rebuild_influence_circle() -> void:
+	"""Build or hide the influence radius circle based on current radius"""
+	if not is_instance_valid(_influence_mesh):
+		return
+
+	if influence_radius <= 0.0:
+		_influence_mesh.visible = false
+		_influence_mesh.mesh = null
+		return
+
+	_influence_mesh.mesh = _create_dashed_circle(influence_radius, 64, 0.5)
+	_influence_mesh.visible = true
+
+
+func _create_dashed_circle(radius: float, segments: int = 64, dash_ratio: float = 0.5) -> ArrayMesh:
+	"""Create a dashed circle mesh on the ground.
+	   dash_ratio: 0.5 means half dash, half gap"""
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_LINES)
+
+	var y := 0.2  # Slightly above ground to be visible
+
+	# Create dashed segments around the circle
+	for i in range(segments):
+		# Skip every other segment to create dashes
+		if i % 2 == 1:
+			continue
+
+		var angle1 := TAU * float(i) / float(segments)
+		var angle2 := TAU * float(i + 1) / float(segments)
+
+		var p1 := Vector3(cos(angle1) * radius, y, sin(angle1) * radius)
+		var p2 := Vector3(cos(angle2) * radius, y, sin(angle2) * radius)
+
+		st.add_vertex(p1)
+		st.add_vertex(p2)
+
+	# Add cardinal direction markers (N/S/E/W) - larger dashes
+	var marker_len: float = minf(radius * 0.05, 5.0)
+	for dir in [0.0, PI * 0.5, PI, PI * 1.5]:  # N, E, S, W
+		var outer := Vector3(cos(dir) * radius, y, sin(dir) * radius)
+		var inner := Vector3(cos(dir) * (radius - marker_len), y, sin(dir) * (radius - marker_len))
+		st.add_vertex(outer)
+		st.add_vertex(inner)
+
+	return st.commit()
+
+
 ## ==================== ARC SECTOR GHOST (Directional Weapons) ====================
 
 func _build_arc_sector_meshes() -> void:
-	# Fill: Arc sector (pie slice) showing fire arc
-	_fill_mesh.mesh = _create_arc_fill(arc_range, arc_angle, arc_facing)
-	_fill_mesh.position = Vector3(0, 0.1, 0)
+	# Fill: Building footprint box (so player can see where structure will be placed)
+	_fill_mesh.mesh = _create_box_mesh(base_size)
+	_fill_mesh.position = Vector3(0, base_size.y * 0.5, 0)
 
-	# Outline: Arc edges + range circle
-	_outline_mesh.mesh = _create_arc_outline(arc_range, arc_angle, arc_facing)
+	# Outline: Building footprint rectangle + arc edges showing fire zone
+	_outline_mesh.mesh = _create_arc_sector_combined_outline(arc_range, arc_angle, arc_facing)
 
-	# Grid: Show weapon position (small rectangle)
-	_grid_mesh.mesh = _create_arc_center_marker()
+	# Grid: Footprint grid lines inside building area
+	var hw := base_size.x * 0.5
+	var hd := base_size.z * 0.5
+	_grid_mesh.mesh = _create_footprint_grid(hw, hd, 2.0)
 
 
 func _create_arc_fill(range_m: float, angle_deg: float, facing_deg: float) -> ArrayMesh:
@@ -763,6 +862,87 @@ func _create_arc_center_marker() -> ArrayMesh:
 	st.add_vertex(Vector3(size, y, 0))
 	st.add_vertex(Vector3(0, y, -size))
 	st.add_vertex(Vector3(0, y, size))
+
+	return st.commit()
+
+
+func _create_arc_sector_combined_outline(range_m: float, angle_deg: float, facing_deg: float) -> ArrayMesh:
+	"""Create combined outline showing both building footprint and fire arc"""
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_LINES)
+
+	var y := 0.15
+	var hw := base_size.x * 0.5
+	var hd := base_size.z * 0.5
+	var h := base_size.y
+
+	# Building footprint rectangle (base)
+	var corners: Array[Vector3] = [
+		Vector3(-hw, y, -hd),
+		Vector3(hw, y, -hd),
+		Vector3(hw, y, hd),
+		Vector3(-hw, y, hd),
+	]
+	for i in range(4):
+		st.add_vertex(corners[i])
+		st.add_vertex(corners[(i + 1) % 4])
+
+	# Vertical corner posts
+	for corner: Vector3 in corners:
+		st.add_vertex(corner)
+		st.add_vertex(corner + Vector3(0, h, 0))
+
+	# Top rectangle
+	for i in range(4):
+		var top: Vector3 = corners[i] + Vector3(0, h, 0)
+		var next_top: Vector3 = corners[(i + 1) % 4] + Vector3(0, h, 0)
+		st.add_vertex(top)
+		st.add_vertex(next_top)
+
+	# Fire arc visualization (on top of footprint)
+	var half_arc := deg_to_rad(angle_deg * 0.5)
+	var facing_rad := deg_to_rad(facing_deg)
+
+	if angle_deg < 360.0:
+		# Arc curve at range
+		var segments := 16
+		for i in range(segments):
+			var t1 := float(i) / float(segments)
+			var t2 := float(i + 1) / float(segments)
+			var a1 := facing_rad + lerpf(-half_arc, half_arc, t1)
+			var a2 := facing_rad + lerpf(-half_arc, half_arc, t2)
+			st.add_vertex(Vector3(sin(a1) * range_m, y, cos(a1) * range_m))
+			st.add_vertex(Vector3(sin(a2) * range_m, y, cos(a2) * range_m))
+
+		# Side lines from center to arc edges
+		var left_angle := facing_rad - half_arc
+		var right_angle := facing_rad + half_arc
+		st.add_vertex(Vector3(0, y, 0))
+		st.add_vertex(Vector3(sin(left_angle) * range_m, y, cos(left_angle) * range_m))
+		st.add_vertex(Vector3(0, y, 0))
+		st.add_vertex(Vector3(sin(right_angle) * range_m, y, cos(right_angle) * range_m))
+	else:
+		# Full 360 range circle
+		var segments := 32
+		for i in range(segments):
+			var a1 := TAU * float(i) / float(segments)
+			var a2 := TAU * float(i + 1) / float(segments)
+			st.add_vertex(Vector3(sin(a1) * range_m, y, cos(a1) * range_m))
+			st.add_vertex(Vector3(sin(a2) * range_m, y, cos(a2) * range_m))
+
+	# Direction indicator arrow (shows facing)
+	var arrow_len := minf(range_m * 0.15, 10.0)
+	var arrow_width := arrow_len * 0.4
+	var arrow_tip := Vector3(sin(facing_rad) * arrow_len, y, cos(facing_rad) * arrow_len)
+	var arrow_left := Vector3(sin(facing_rad - PI * 0.8) * arrow_width, y, cos(facing_rad - PI * 0.8) * arrow_width)
+	var arrow_right := Vector3(sin(facing_rad + PI * 0.8) * arrow_width, y, cos(facing_rad + PI * 0.8) * arrow_width)
+
+	st.add_vertex(Vector3(0, y, 0))
+	st.add_vertex(arrow_tip)
+	st.add_vertex(arrow_tip)
+	st.add_vertex(arrow_left)
+	st.add_vertex(arrow_tip)
+	st.add_vertex(arrow_right)
 
 	return st.commit()
 
