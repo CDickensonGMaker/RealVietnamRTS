@@ -26,26 +26,26 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.BUNKER: "res://assets/models/structures/bunker.glb",
 	BuildingData.BuildingType.SANDBAG_BUNKER: "res://assets/models/structures/firebase/sandbag_bunker.glb",
 	BuildingData.BuildingType.CONEX_BUNKER: "res://assets/models/structures/firebase/conex_bunker.glb",
-	BuildingData.BuildingType.MACHINE_GUN_NEST: "res://assets/models/structures/mg_nest.glb",
-	BuildingData.BuildingType.MORTAR_PIT: "res://assets/models/structures/converted/mortar_pit.glb",
+	BuildingData.BuildingType.MACHINE_GUN_NEST: "res://assets/models/structures/firebase/mg_nest.glb",
+	BuildingData.BuildingType.MORTAR_PIT: "res://assets/models/structures/firebase/mortar_pit.glb",
 	BuildingData.BuildingType.WIRE_OBSTACLE: "res://assets/models/structures/converted/barbed_wire.glb",
 	BuildingData.BuildingType.TRIPLE_CONCERTINA: "res://assets/models/structures/firebase/triple_concertina.glb",
 	BuildingData.BuildingType.CLAYMORE_LINE: "res://assets/models/structures/converted/claymore_line.glb",
-	BuildingData.BuildingType.WATCHTOWER: "res://models/Watchtower.glb",
+	BuildingData.BuildingType.WATCHTOWER: "res://assets/models/structures/firebase/observation_tower.glb",  # Reuses observation tower model
 
 	# =========================================================================
 	# FIREBASE SUPPORT
 	# =========================================================================
 	BuildingData.BuildingType.HELIPAD: "res://assets/models/structures/converted/helipad.glb",
-	BuildingData.BuildingType.PSP_HELIPAD: "res://assets/models/structures/firebase/psp_helipad.glb",
-	BuildingData.BuildingType.VIP_HELIPAD: "res://assets/models/structures/firebase/vip_helipad.glb",
-	BuildingData.BuildingType.HELICOPTER_REVETMENT: "res://assets/models/structures/firebase/helo_revetment.glb",
-	BuildingData.BuildingType.AMMO_BUNKER: "res://assets/models/structures/barracks.glb",
+	BuildingData.BuildingType.PSP_HELIPAD: "res://assets/models/structures/airfield/psp_helipad.glb",
+	BuildingData.BuildingType.VIP_HELIPAD: "res://assets/models/structures/converted/helipad.glb",  # Fallback to regular helipad
+	BuildingData.BuildingType.HELICOPTER_REVETMENT: "res://assets/models/structures/airfield/aircraft_revetment.glb",  # Use aircraft revetment
+	BuildingData.BuildingType.AMMO_BUNKER: "res://assets/models/structures/firebase/ammo_bunker.glb",
 	BuildingData.BuildingType.FUEL_DEPOT: "res://assets/models/structures/converted/fuel_depot.glb",
-	BuildingData.BuildingType.FUEL_POINT: "res://assets/models/structures/firebase/fuel_point.glb",
-	BuildingData.BuildingType.MEDICAL_STATION: "res://assets/models/structures/converted/tent.glb",
-	BuildingData.BuildingType.TOC: "res://assets/models/structures/hq_building.glb",
-	BuildingData.BuildingType.COMMO_BUNKER: "res://assets/models/structures/barracks_bunker.glb",
+	BuildingData.BuildingType.FUEL_POINT: "res://assets/models/structures/converted/fuel_depot.glb",  # Fallback to fuel depot
+	BuildingData.BuildingType.MEDICAL_STATION: "res://assets/models/structures/firebase/aid_station.glb",
+	BuildingData.BuildingType.TOC: "res://assets/models/structures/firebase/toc.glb",
+	BuildingData.BuildingType.COMMO_BUNKER: "res://assets/models/structures/firebase/commo_bunker.glb",
 
 	# =========================================================================
 	# FIREBASE LIVING
@@ -55,18 +55,18 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.LATRINE: "res://assets/models/structures/firebase/latrine.glb",
 	BuildingData.BuildingType.SHOWER_POINT: "res://assets/models/structures/firebase/shower_point.glb",
 	BuildingData.BuildingType.OBSERVATION_TOWER: "res://assets/models/structures/firebase/observation_tower.glb",
-	BuildingData.BuildingType.GUARD_TOWER: "res://assets/models/structures/firebase/guard_tower.glb",
+	BuildingData.BuildingType.GUARD_TOWER: "res://assets/models/structures/firebase/observation_tower.glb",  # Reuses observation tower
 	BuildingData.BuildingType.POWDER_BUNKER: "res://assets/models/structures/firebase/powder_bunker.glb",
 
 	# =========================================================================
 	# FIREBASE HEAVY
 	# =========================================================================
 	BuildingData.BuildingType.ARTILLERY_PIT: "res://assets/models/structures/converted/artillery_pit.glb",
-	BuildingData.BuildingType.HOWITZER_PIT_105MM: "res://assets/models/structures/firebase/howitzer_pit_105.glb",
-	BuildingData.BuildingType.HOWITZER_PIT_155MM: "res://assets/models/structures/firebase/howitzer_pit_155.glb",
+	BuildingData.BuildingType.HOWITZER_PIT_105MM: "res://assets/models/structures/converted/artillery_pit.glb",  # Reuses artillery pit
+	BuildingData.BuildingType.HOWITZER_PIT_155MM: "res://assets/models/structures/converted/artillery_pit.glb",  # Reuses artillery pit
 	BuildingData.BuildingType.FIRE_DIRECTION_CENTER: "res://assets/models/structures/firebase/fire_direction_center.glb",
 	BuildingData.BuildingType.TANK_REVETMENT: "res://assets/models/structures/converted/tank_revetment.glb",
-	BuildingData.BuildingType.OPEN_REVETMENT: "res://assets/models/structures/firebase/open_revetment.glb",
+	BuildingData.BuildingType.OPEN_REVETMENT: "res://assets/models/structures/converted/tank_revetment.glb",  # Reuses tank revetment
 
 	# =========================================================================
 	# VIETNAMESE VILLAGE
@@ -128,7 +128,7 @@ const BUILDING_MODELS: Dictionary = {
 	# =========================================================================
 	BuildingData.BuildingType.STEEL_TRUSS_BRIDGE: "res://assets/models/structures/infrastructure/steel_bridge.glb",
 	BuildingData.BuildingType.WOODEN_BRIDGE: "res://assets/models/structures/infrastructure/wooden_bridge.glb",
-	BuildingData.BuildingType.PONTOON_BRIDGE: "res://assets/models/structures/infrastructure/pontoon_bridge.glb",
+	BuildingData.BuildingType.PONTOON_BRIDGE: "res://assets/models/structures/infrastructure/us_army_bridge.glb",
 	BuildingData.BuildingType.STONE_ARCH_BRIDGE: "res://assets/models/structures/infrastructure/stone_arch_bridge.glb",
 	BuildingData.BuildingType.DOCK_PIER: "res://assets/models/structures/infrastructure/dock_pier.glb",
 	BuildingData.BuildingType.CARGO_CRANE: "res://assets/models/structures/infrastructure/crane.glb",
@@ -185,6 +185,7 @@ const BUILDING_MODELS: Dictionary = {
 	# FIREBASE LOGISTICS
 	# =========================================================================
 	BuildingData.BuildingType.SUPPLY_DEPOT: "res://assets/models/structures/us/us_supply_depot.glb",
+	BuildingData.BuildingType.TRUCK_STAGING_AREA: "res://assets/models/structures/firebase/supply_depot.glb",  # Use supply depot model as placeholder
 
 	# =========================================================================
 	# ADDITIONAL FIREBASE DEFENSES
@@ -192,6 +193,11 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.TANK_TRAP: "res://assets/models/structures/converted/tank_trap.glb",
 	BuildingData.BuildingType.FOXHOLE: "res://assets/models/structures/firebase/foxhole_sandbags.glb",
 	BuildingData.BuildingType.TRENCH: "res://assets/models/structures/firebase/trench_modular.glb",
+
+	# =========================================================================
+	# SUPPLY CHAIN / BRIDGES
+	# =========================================================================
+	BuildingData.BuildingType.MODULAR_BRIDGE: "res://assets/models/structures/infrastructure/us_army_bridge.glb",
 }
 
 ## Configuration
