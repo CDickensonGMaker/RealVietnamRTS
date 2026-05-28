@@ -374,11 +374,10 @@ func _rebuild_chunks_in_region(cell_region: Rect2i) -> void:
 		for cx in range(min_chunk.x, max_chunk.x + 1):
 			var coord := Vector2i(cx, cz)
 			if chunks.has(coord):
-				# Use _rebuild_chunk_immediate which preserves the vegetation cache.
-				# _unload_chunk calls vegetation_manager.clear_chunk_full() which wipes
-				# _chunk_terrain and _chunk_placements, causing trees to respawn in
-				# their original positions after every explosion.
-				_rebuild_chunk_immediate(coord)
+				# Use queue_chunk_rebuild to prevent frame spikes when multiple
+				# terrain modifications happen simultaneously (e.g., 3+ flatten jobs).
+				# The queue processes chunks with REBUILD_BUDGET_MS time budget per frame.
+				queue_chunk_rebuild(coord)
 
 
 ## Set camera for streaming

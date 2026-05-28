@@ -54,6 +54,10 @@ const DEBUG_WORK_MULTIPLIER: float = 1.0
 ## Container for job-related nodes
 var _node_container: Node3D = null
 
+## Terrain update coalescing (prevents feedback storm)
+var _terrain_dirty_regions: Array[Rect2i] = []
+var _terrain_handler_running: bool = false
+
 
 func _ready() -> void:
 	# Create container for job nodes
@@ -90,15 +94,44 @@ func _connect_terrain_signals() -> void:
 
 
 func _on_terrain_modified(region: Rect2i) -> void:
-	"""Handle terrain modification - refresh job work positions and check completion"""
-	# Refresh work positions for affected jobs
-	var affected_jobs: Array[UnifiedJobClass] = get_jobs_in_region(region)
-	for job in affected_jobs:
-		if is_instance_valid(job):
-			job.refresh_work_positions()
+	"""Queue terrain modification for coalesced processing (prevents feedback storm)"""
+	_terrain_dirty_regions.append(region)
 
-	# Check if jobs can now be worked or are complete
-	on_terrain_updated(region)
+
+func _flush_terrain_updates() -> void:
+	"""Process all queued terrain modifications in a single batch"""
+	if _terrain_dirty_regions.is_empty() or _terrain_handler_running:
+		return
+	_terrain_handler_running = true
+
+	# Merge all queued regions into one
+	var merged: Rect2i = _terrain_dirty_regions[0]
+	for i in range(1, _terrain_dirty_regions.size()):
+		merged = merged.merge(_terrain_dirty_regions[i])
+	_terrain_dirty_regions.clear()
+
+	# Collect unique affected jobs ONCE
+	var affected: Array[UnifiedJobClass] = get_jobs_in_region(merged)
+	var seen: Dictionary = {}
+	for job in affected:
+		if not is_instance_valid(job):
+			continue
+		if seen.has(job.job_id):
+			continue
+		seen[job.job_id] = true
+		job.refresh_work_positions()
+
+	# Run completion checks once per affected job
+	for job in affected:
+		if not is_instance_valid(job):
+			continue
+		match job.job_type:
+			UnifiedJobClass.Type.CLEAR_TERRAIN:
+				_check_clearing_complete(job)
+			UnifiedJobClass.Type.FLATTEN_AREA:
+				_check_flattening_complete(job)
+
+	_terrain_handler_running = false
 
 
 func _on_vegetation_changed(region: Rect2i) -> void:
@@ -116,6 +149,7 @@ func _process(delta: float) -> void:
 	if _update_timer >= job_update_interval:
 		_update_timer = 0.0
 		_update_job_states()
+		_flush_terrain_updates()
 
 
 func _update_job_states() -> void:
@@ -129,21 +163,14 @@ func _update_job_states() -> void:
 		if job.can_be_worked():
 			newly_ready.append(job)
 
-	# Move newly ready jobs
+	# Move newly ready jobs and emit worker_needed ONLY for newly ready jobs
 	for job in newly_ready:
 		_pending_jobs.erase(job)
 		_ready_jobs.append(job)
 		job.set_state(UnifiedJobClass.State.READY)
 		job_ready.emit(job)
 
-		# Signal that workers are needed
-		if job.assigned_workers.size() < job.max_workers:
-			worker_needed.emit(job)
-
-	# Check ready/in-progress jobs for worker needs
-	for job in _ready_jobs + _in_progress_jobs:
-		if not is_instance_valid(job):
-			continue
+		# Signal that workers are needed (only on state transition, not every tick)
 		if job.assigned_workers.size() < job.max_workers:
 			worker_needed.emit(job)
 
@@ -442,6 +469,8 @@ func reset() -> void:
 	_in_progress_jobs.clear()
 	_validation_cache.clear()
 	_validation_cache_frame = -1
+	_terrain_dirty_regions.clear()
+	UnifiedJobClass._cached_terrain = null
 
 	print("[JobSystem] Reset - cleared all jobs and freed job nodes")
 
@@ -523,7 +552,7 @@ func get_job_at_position(position: Vector3, tolerance: float = 2.0) -> UnifiedJo
 	for job in _ready_jobs + _in_progress_jobs:
 		if not is_instance_valid(job):
 			continue
-		var job_pos: Vector3 = job.center_position
+		var job_pos: Vector3 = job.get_centroid()
 		var dist: float = Vector2(position.x - job_pos.x, position.z - job_pos.z).length()
 		if dist < closest_dist:
 			closest_dist = dist
@@ -1636,7 +1665,6 @@ func _check_firebase_zone(center: Vector3, building_type: int) -> Dictionary:
 	# Buildings that can_place_anywhere don't need firebase zone
 	# This includes: Field defenses (sandbags, wire, claymores) AND TOC itself
 	if building_data.can_place_anywhere:
-		print("[JobSystem] _check_firebase_zone: %s can_place_anywhere=true, skipping" % building_data.display_name)
 		return {"valid": true, "error": PlacementError.NONE, "message": ""}
 
 	# Firebase Defense buildings require being within a TOC influence zone
@@ -1646,21 +1674,10 @@ func _check_firebase_zone(center: Vector3, building_type: int) -> Dictionary:
 		if is_instance_valid(node):
 			firebases.append(node)
 
-	print("[JobSystem] _check_firebase_zone: %s requires firebase, found %d firebases" % [
-		building_data.display_name, firebases.size()
-	])
-
 	# Check if position is within any firebase influence zone
 	for firebase in firebases:
 		if firebase.has_method("is_position_in_influence"):
-			var is_active: bool = firebase.is_active() if firebase.has_method("is_active") else false
-			var influence_r: float = firebase.influence_radius if "influence_radius" in firebase else 0.0
-			var dist: float = firebase.global_position.distance_to(center)
 			var in_influence: bool = firebase.is_position_in_influence(center)
-			print("[JobSystem]   Firebase '%s': is_active=%s, influence_radius=%.1f, dist=%.1f, in_influence=%s" % [
-				firebase.firebase_name if "firebase_name" in firebase else "unknown",
-				is_active, influence_r, dist, in_influence
-			])
 			if in_influence:
 				return {"valid": true, "error": PlacementError.NONE, "message": ""}
 
