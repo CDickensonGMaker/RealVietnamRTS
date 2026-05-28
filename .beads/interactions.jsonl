@@ -14,3 +14,4 @@
 {"id":"int-74a9badf","kind":"field_change","created_at":"2026-05-27T17:18:47.1052769Z","actor":"CDickensonGMaker","issue_id":"RealVietnamRTS-3o7","extra":{"field":"status","new_value":"closed","old_value":"in_progress"}}
 {"id":"int-275fba68","kind":"field_change","created_at":"2026-05-27T17:21:23.3133338Z","actor":"CDickensonGMaker","issue_id":"RealVietnamRTS-two","extra":{"field":"status","new_value":"closed","old_value":"in_progress"}}
 {"id":"int-4c91a3e8","kind":"field_change","created_at":"2026-05-27T17:24:28.4788564Z","actor":"CDickensonGMaker","issue_id":"RealVietnamRTS-x9x","extra":{"field":"status","new_value":"closed","old_value":"in_progress"}}
+{"id":"int-7aff623f","kind":"field_change","created_at":"2026-05-28T03:19:41.4555321Z","actor":"CDickensonGMaker","issue_id":"RealVietnamRTS-2wa","extra":{"field":"status","new_value":"deferred","old_value":"open"}}
