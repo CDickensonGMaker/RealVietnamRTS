@@ -324,6 +324,10 @@ func _complete() -> void:
 
 	construction_complete.emit(building)
 
+	# CRITICAL: Emit BattleSignals for systems like SupplyChainManager
+	if BattleSignals:
+		BattleSignals.construction_complete.emit(building)
+
 	print("[ConstructionSite] Complete! Building type %d at %s" % [building_type, global_position])
 
 	# Queue self for removal (building replaces us)

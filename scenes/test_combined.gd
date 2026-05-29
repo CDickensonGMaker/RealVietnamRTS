@@ -10,10 +10,15 @@ extends Node3D
 const TerrainTypes = preload("res://terrain/terrain_types.gd")
 const UnifiedJobClass = preload("res://firebase_system/job_system/unified_job.gd")
 const GridCoordsClass = preload("res://terrain/core/grid_coords.gd")
-const TerrainGridClass = preload("res://terrain/core/terrain_grid.gd")
+const ClearingState = preload("res://terrain/clearing_state.gd")
 const TreeNodeClass = preload("res://terrain/vegetation/tree_node.gd")
 const Squad = preload("res://battle_system/nodes/squad.gd")
 const FirebaseClass = preload("res://firebase_system/firebase.gd")
+const SupplyDepotScene = preload("res://game/scenes/buildings/supply_depot.tscn")
+
+# Supply chain model paths
+const M35_TRUCK_MODEL := "res://assets/models/vehicles/m35_deuce_truck.glb"
+const CH47_CHINOOK_MODEL := "res://assets/models/helicopters/ch47_chinook.glb"
 
 ## Mock heightmap for flat terrain fallback
 class MockHeightmap:
@@ -64,6 +69,9 @@ var _hq_center: Vector3 = Vector3.ZERO
 # Workers (engineers + bulldozers)
 var workers: Array[Node3D] = []
 
+# Combat squads that consume supply
+var _combat_squads: Array[Node3D] = []
+
 # Debug overlays
 var grid_overlay: MeshInstance3D
 var grid_visible := false
@@ -78,10 +86,38 @@ var battle_hud: Node = null
 const TEST_BILLBOARD_COUNT := 300
 const TREE_DENSITY := 0.008
 
+# Supply chain settings
+const REAR_DEPOT_CAPACITY := 999999.0
+const FIREBASE_DEPOT_CAPACITY := 2000.0
+const INITIAL_FIREBASE_SUPPLY := 400.0
+const TRUCK_SUPPLY_AMOUNT := 500.0
+const HELI_SUPPLY_AMOUNT := 800.0
+const CHINOOK_CRUISE_ALTITUDE := 40.0
+const CHINOOK_SPEED := 35.0
+const CHINOOK_ROTOR_MAX_SPEED := 15.0
+
 # Loading overlay
 var _loading_overlay: ColorRect = null
 var _loading_label: Label = null
 var _is_loading: bool = false
+
+# Supply chain - depots
+var _rear_depot: Node3D = null
+var _firebase_depot: Node3D = null
+
+# Supply chain - convoy
+var _supply_trucks: Array[Node3D] = []
+var _convoy_state: String = "IDLE"
+var _road_spline: RefCounted = null
+var _return_spline: RefCounted = null
+var _road_waypoints: Array[Vector3] = []
+
+# Supply chain - Chinook
+var _chinook: Node3D = null
+var _chinook_state: String = "WAITING"
+var _chinook_cargo: float = 0.0
+var _chinook_rotor_speed: float = 0.0
+var _chinook_waiting_pos: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
@@ -153,6 +189,9 @@ func _ready() -> void:
 	# Spawn combat units (US + VC)
 	_spawn_combat_units(_hq_center)
 
+	# Setup supply chain (Pillar 3)
+	_setup_supply_chain(_hq_center)
+
 	# Connect to JobSystem
 	var job_system = get_node_or_null("/root/JobSystem")
 	if job_system:
@@ -179,7 +218,14 @@ func _ready() -> void:
 	print("Controls:")
 	print("  WASD: Pan camera | Mouse Wheel: Zoom")
 	print("  Left Click: Select | Right Click: Move")
-	print("  B: Build menu | G: Grid | T: Trees | R: Reload")
+	print("  B: Build menu | G: Grid | V: Trees | R: Reload")
+	print("  T: Dispatch truck convoy | H: Request Chinook supply")
+	print("")
+	print("SUPPLY CHAIN FLOW:")
+	print("  1. Build a Supply Depot at firebase (B menu)")
+	print("  2. Bulldozer auto-builds road to rear depot")
+	print("  3. Truck starts supply runs when road completes")
+	print("  4. Combat squads near depot receive supply")
 	print("")
 
 
@@ -271,59 +317,43 @@ func _setup_local_terrain_async() -> void:
 
 
 func _sync_terrain_with_globals() -> void:
-	if terrain_intg and terrain_intg.has_method("reinit_with_terrain"):
-		terrain_intg.reinit_with_terrain(local_terrain, MAP_SIZE)
-		if terrain_intg.terrain_grid:
-			_initialize_terrain_grid(terrain_intg.terrain_grid)
+	# Initialize UnifiedTerrain with our heightmap - this is THE single source of truth
+	var unified_terrain: Node = get_node_or_null("/root/UnifiedTerrain")
+	if unified_terrain and local_terrain and local_terrain.heightmap:
+		if unified_terrain.has_method("init_from_heightmap"):
+			unified_terrain.init_from_heightmap(local_terrain.heightmap)
+			print("[TestCombined] UnifiedTerrain initialized with heightmap")
+
+		# Initialize terrain types (jungle patterns, clear center)
+		_initialize_terrain_types(unified_terrain)
 	else:
-		GridCoordsClass.init(MAP_SIZE)
-		if terrain_intg:
-			terrain_intg.terrain_manager = local_terrain
-			var new_grid = TerrainGridClass.new(MAP_SIZE)
-			terrain_intg.terrain_grid = new_grid
-			_initialize_terrain_grid(new_grid)
+		push_warning("[TestCombined] UnifiedTerrain not found or heightmap missing")
+
+	# Also sync with TerrainIntegration for legacy compatibility
+	GridCoordsClass.init(MAP_SIZE)
+	if terrain_intg:
+		terrain_intg.terrain_manager = local_terrain
+		if unified_terrain:
+			terrain_intg.unified_terrain = unified_terrain
 
 
-func _initialize_terrain_grid(grid) -> void:
-	if not grid or not grid.has_method("set_terrain_type"):
+func _initialize_terrain_types(terrain: Node) -> void:
+	"""Initialize terrain types on UnifiedTerrain - clear HQ center, jungle elsewhere"""
+	if not terrain:
 		return
 
-	var noise := FastNoiseLite.new()
-	noise.noise_type = FastNoiseLite.TYPE_PERLIN
-	noise.frequency = 0.015
-	noise.seed = 42
-
-	var cell_size: float = GridCoordsClass.GAMEPLAY_CELL_SIZE
-	var cell_count: int = int(ceil(MAP_SIZE / cell_size))
 	var map_center: float = MAP_SIZE * 0.5
+	var center_pos := Vector3(map_center, 0.0, map_center)
 
-	for x in range(cell_count):
-		for z in range(cell_count):
-			var world_x: float = (x + 0.5) * cell_size
-			var world_z: float = (z + 0.5) * cell_size
-			var world_pos := Vector3(world_x, 0.0, world_z)
+	# Mark the HQ center as cleared - this sets terrain type to CLEAR automatically
+	if terrain.has_method("set_clearing_stage_area"):
+		terrain.set_clearing_stage_area(center_pos, CLEARING_RADIUS, ClearingState.Stage.CLEARED)
+		print("[TestCombined] HQ area marked as cleared (%.0fm radius)" % CLEARING_RADIUS)
 
-			var dist_from_center: float = Vector2(world_x - map_center, world_z - map_center).length()
-			var terrain_type: int
+	# The rest of the terrain types are derived from heightmap by UnifiedTerrain's
+	# _build_gameplay_grid_from_heightmap() - jungle types based on elevation/slope
 
-			if dist_from_center < CLEARING_RADIUS:
-				terrain_type = TerrainTypes.Type.CLEAR
-			else:
-				var n: float = noise.get_noise_2d(world_x, world_z)
-				if n < -0.3:
-					terrain_type = TerrainTypes.Type.LIGHT_JUNGLE
-				elif n < 0.3:
-					terrain_type = TerrainTypes.Type.MEDIUM_JUNGLE
-				else:
-					terrain_type = TerrainTypes.Type.HEAVY_JUNGLE
-
-			grid.set_terrain_type(world_pos, terrain_type)
-
-	if grid.has_method("mark_area_cleared"):
-		var center_pos := Vector3(map_center, 0.0, map_center)
-		grid.mark_area_cleared(center_pos, CLEARING_RADIUS)
-
-	print("[TestCombined] Terrain grid initialized with sporadic jungle")
+	print("[TestCombined] Terrain types initialized on UnifiedTerrain")
 
 
 func _setup_vegetation() -> void:
@@ -341,11 +371,13 @@ func _setup_vegetation() -> void:
 	billboard_vegetation.set_camera(camera)
 	billboard_vegetation.set_vegetation_manager(vegetation_manager)
 
-	if terrain_intg and terrain_intg.terrain_grid:
-		# CRITICAL: Connect VegetationManager to terrain grid for clearing signal chain
-		vegetation_manager.set_terrain_grid(terrain_intg.terrain_grid)
-		billboard_vegetation.set_terrain_grid(terrain_intg.terrain_grid)
-		print("[TestCombined] VegetationManager connected to TerrainGrid for clearing signals")
+	# Connect vegetation to terrain for clearing signal chain
+	# Note: VegetationManager expects RefCounted (TerrainGrid), not Node (UnifiedTerrain)
+	# For now, connect to UnifiedTerrain's vegetation_changed signal for clearing updates
+	var unified_terrain: Node = get_node_or_null("/root/UnifiedTerrain")
+	if unified_terrain and unified_terrain.has_signal("vegetation_changed"):
+		unified_terrain.vegetation_changed.connect(_on_vegetation_changed)
+		print("[TestCombined] Connected to UnifiedTerrain.vegetation_changed for clearing updates")
 
 	billboard_vegetation.billboards_per_chunk = TEST_BILLBOARD_COUNT
 	billboard_vegetation.billboard_range_min = 80.0
@@ -399,6 +431,15 @@ func _setup_vegetation() -> void:
 				container.visible = true
 
 	print("[TestCombined] Vegetation setup complete: %d chunks" % VEG_CHUNKS.size())
+
+
+func _on_vegetation_changed(region: Rect2i) -> void:
+	"""Handle vegetation clearing from UnifiedTerrain"""
+	# Forward clearing updates to vegetation managers
+	if vegetation_manager and vegetation_manager.has_method("clear_vegetation_in_region"):
+		vegetation_manager.clear_vegetation_in_region(region)
+	if billboard_vegetation and billboard_vegetation.has_method("clear_vegetation_in_region"):
+		billboard_vegetation.clear_vegetation_in_region(region)
 
 
 func _setup_3d_trees() -> void:
@@ -609,7 +650,14 @@ func _spawn_squad(squad_data: Resource, spawn_pos: Vector3, unit_name: String) -
 	if squad_data == us_engineer_data or squad_data == us_bulldozer_data:
 		workers.append(squad)
 
+	# Track US combat squads for supply consumption
 	var faction: int = squad_data.faction if squad_data else GameEnums.Faction.US_ARMY
+	if squad_data == us_rifle_data:
+		_combat_squads.append(squad)
+		# Add supply tracking metadata (start at 50% supply)
+		squad.set_meta("supply_current", 50.0)
+		squad.set_meta("supply_max", 100.0)
+
 	BattleSignals.unit_spawned.emit(squad, faction)
 
 	return squad
@@ -872,7 +920,10 @@ func _create_simple_hud() -> Label:
 	return label
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_update_convoy_loop(delta)
+	_update_chinook_loop(delta)
+	_update_squad_supply(delta)
 	_update_hud()
 
 
@@ -896,7 +947,17 @@ func _update_hud() -> void:
 		var counts: Dictionary = job_system.get_job_counts()
 		text += "\nJobs: %d pending, %d ready, %d in-progress\n" % [counts.pending, counts.ready, counts.in_progress]
 
-	text += "\nControls: B=Build | G=Grid | T=Trees | R=Reload"
+	# Add supply chain status
+	var fb_supply: float = _firebase_depot.get_meta("supply_current", 0.0) if _firebase_depot else 0.0
+	var fb_max: float = _firebase_depot.get_meta("supply_max", FIREBASE_DEPOT_CAPACITY) if _firebase_depot else FIREBASE_DEPOT_CAPACITY
+	text += "\nFirebase Depot: %.0f/%.0f" % [fb_supply, fb_max]
+	text += " | Convoy=%s | Chinook=%s\n" % [_convoy_state, _chinook_state]
+
+	# Squad supply status
+	if not _combat_squads.is_empty():
+		text += "\nSquad Supply:\n" + _get_squad_supply_status()
+
+	text += "Controls: B=Build | G=Grid | V=Trees | T=Convoy | H=Chinook | R=Reload"
 	hud.text = text
 
 
@@ -911,11 +972,17 @@ func _input(event: InputEvent) -> void:
 				if grid_overlay:
 					grid_overlay.visible = grid_visible
 				print("[TestCombined] Grid: %s" % ("ON" if grid_visible else "OFF"))
-			KEY_T:
+			KEY_V:
 				trees_visible = not trees_visible
 				if tree_container:
 					tree_container.visible = trees_visible
 				print("[TestCombined] Trees: %s" % ("ON" if trees_visible else "OFF"))
+			KEY_T:
+				# Dispatch truck convoy
+				_dispatch_convoy()
+			KEY_H:
+				# Request Chinook supply run
+				_request_chinook_supply()
 			KEY_R:
 				get_tree().reload_current_scene()
 			KEY_ESCAPE:
@@ -982,3 +1049,696 @@ func _hide_loading() -> void:
 func _on_terrain_progress(stage: String, percent: float) -> void:
 	if _loading_label:
 		_loading_label.text = "%s (%.0f%%)" % [stage, percent * 100.0]
+
+
+# ============================================================================
+# SUPPLY CHAIN SYSTEM (Pillar 3: Physical Supply Chains)
+# ============================================================================
+
+func _setup_supply_chain(hq_pos: Vector3) -> void:
+	"""Setup supply chain: rear depot only, firebase depot placed by player triggers road building"""
+	print("[TestCombined] Setting up supply chain (Pillar 3)...")
+
+	# Calculate positions relative to HQ
+	var rear_depot_pos := hq_pos + Vector3(-100, 0, 0)  # 100m west of HQ
+	rear_depot_pos.y = _get_terrain_height(rear_depot_pos.x, rear_depot_pos.z)
+
+	# Chinook waiting position (behind rear depot, at altitude)
+	_chinook_waiting_pos = rear_depot_pos + Vector3(-30, CHINOOK_CRUISE_ALTITUDE, -30)
+
+	# Create ONLY the rear depot (main base) - firebase depot is player-placed
+	_create_rear_depot(rear_depot_pos)
+
+	# Create supply truck (1 truck, waiting for road)
+	_create_supply_convoy(rear_depot_pos)
+
+	# Create Chinook helicopter
+	_create_chinook_helicopter()
+
+	# Register rear depot as main base
+	_register_depots_for_auto_roads()
+
+	# Connect to SupplyChainManager for road completion
+	var supply_chain_manager: Node = get_node_or_null("/root/SupplyChainManager")
+	if supply_chain_manager and supply_chain_manager.has_signal("road_construction_completed"):
+		supply_chain_manager.road_construction_completed.connect(_on_road_construction_completed)
+		print("[TestCombined] Connected to SupplyChainManager.road_construction_completed")
+
+	print("[TestCombined] Supply chain ready: 1 rear depot, %d truck (waiting), 1 Chinook" % _supply_trucks.size())
+	print("[TestCombined] Build a Supply Depot at firebase to trigger auto-road construction")
+
+
+func _create_rear_depot(pos: Vector3) -> void:
+	"""Create rear supply depot using the real supply_depot.tscn model"""
+	# Instantiate the real supply depot scene
+	_rear_depot = SupplyDepotScene.instantiate()
+	_rear_depot.name = "RearSupplyDepot"
+	_rear_depot.position = pos
+	add_child(_rear_depot)
+
+	# Supply storage metadata (high capacity for main base)
+	_rear_depot.set_meta("supply_current", REAR_DEPOT_CAPACITY)
+	_rear_depot.set_meta("supply_max", REAR_DEPOT_CAPACITY)
+	_rear_depot.set_meta("name", "Rear Depot")
+
+	# Helipad for Chinook (placed beside depot)
+	var helipad := _create_helipad_visual()
+	helipad.position = Vector3(15, 0, 0)
+	_rear_depot.add_child(helipad)
+
+	print("[TestCombined] Rear depot created at %v (using real model)" % pos)
+
+
+func _create_helipad_visual() -> Node3D:
+	"""Create helipad visual"""
+	var helipad := Node3D.new()
+	helipad.name = "Helipad"
+
+	# Pad surface
+	var pad := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(15, 15)
+	pad.mesh = plane
+	pad.position.y = 0.05
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.3, 0.3, 0.3)
+	pad.material_override = mat
+	helipad.add_child(pad)
+
+	# H marking
+	var h_mark := MeshInstance3D.new()
+	var h_box := BoxMesh.new()
+	h_box.size = Vector3(6, 0.1, 1)
+	h_mark.mesh = h_box
+	h_mark.position.y = 0.1
+
+	var h_mat := StandardMaterial3D.new()
+	h_mat.albedo_color = Color(0.9, 0.9, 0.9)
+	h_mark.material_override = h_mat
+	helipad.add_child(h_mark)
+
+	return helipad
+
+
+func _setup_road_waypoints(rear_pos: Vector3, firebase_pos: Vector3) -> void:
+	"""Setup road waypoints between depots for convoy movement"""
+	# Simple waypoint path from rear depot to firebase
+	_road_waypoints = [
+		rear_pos + Vector3(20, 0, 0),
+		Vector3((rear_pos.x + firebase_pos.x) * 0.5, 0, rear_pos.z + 15),
+		firebase_pos + Vector3(-30, 0, 0),
+	]
+
+	# Adjust heights
+	for i in _road_waypoints.size():
+		_road_waypoints[i].y = _get_terrain_height(_road_waypoints[i].x, _road_waypoints[i].z)
+
+	# Create TerrainSpline for smooth curves
+	if ClassDB.class_exists("TerrainSpline") or ResourceLoader.exists("res://terrain/splines/terrain_spline.gd"):
+		var TerrainSplineClass = load("res://terrain/splines/terrain_spline.gd")
+		if TerrainSplineClass:
+			var terrain: Node = get_node_or_null("/root/TerrainIntegration")
+
+			_road_spline = TerrainSplineClass.new()
+			if terrain and _road_spline.has_method("set_terrain"):
+				_road_spline.set_terrain(terrain)
+			if _road_spline.has_method("set_waypoints"):
+				_road_spline.set_waypoints(_road_waypoints)
+
+			# Create return spline (reverse waypoints)
+			var reverse_waypoints: Array[Vector3] = []
+			for i in range(_road_waypoints.size() - 1, -1, -1):
+				reverse_waypoints.append(_road_waypoints[i])
+			_return_spline = TerrainSplineClass.new()
+			if terrain and _return_spline.has_method("set_terrain"):
+				_return_spline.set_terrain(terrain)
+			if _return_spline.has_method("set_waypoints"):
+				_return_spline.set_waypoints(reverse_waypoints)
+
+			print("[TestCombined] Road splines created: %d waypoints" % _road_waypoints.size())
+
+
+func _create_supply_convoy(rear_pos: Vector3) -> void:
+	"""Create supply truck (1 truck, waits for road to be built)"""
+	var truck := _spawn_truck(0, rear_pos)
+	if truck:
+		_supply_trucks.append(truck)
+		truck.set_meta("state", "WAITING_FOR_ROAD")
+
+	_convoy_state = "WAITING_FOR_ROAD"
+	print("[TestCombined] Supply truck created - waiting for road to firebase")
+
+
+func _spawn_truck(convoy_index: int, depot_pos: Vector3) -> Node3D:
+	"""Spawn a single M35 truck"""
+	var truck := Node3D.new()
+	truck.name = "SupplyTruck_%d" % convoy_index
+
+	# Position trucks at rear depot
+	var offset := Vector3(-4 + convoy_index * 8, 0, 10)
+	truck.position = depot_pos + offset
+	truck.position.y = _get_terrain_height(truck.position.x, truck.position.z)
+	add_child(truck)
+
+	# Try to load real M35 model
+	var model_scene: PackedScene = load(M35_TRUCK_MODEL)
+	if model_scene:
+		var model: Node3D = model_scene.instantiate()
+		model.name = "M35Model"
+		truck.add_child(model)
+	else:
+		# Fallback to placeholder geometry
+		_create_placeholder_truck(truck)
+
+	# Initialize truck state
+	truck.set_meta("state", "IDLE")
+	truck.set_meta("cargo", 0.0)
+	truck.set_meta("spline_distance", 0.0)
+	truck.set_meta("returning", false)
+	truck.set_meta("convoy_index", convoy_index)
+	truck.set_meta("base_speed", 12.0)
+
+	return truck
+
+
+func _create_placeholder_truck(truck: Node3D) -> void:
+	"""Fallback placeholder truck geometry"""
+	# Body
+	var body := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(2.5, 2.0, 6.0)
+	body.mesh = box
+	body.position.y = 1.5
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.35, 0.4, 0.3)  # OD green
+	body.material_override = mat
+	truck.add_child(body)
+
+	# Cab
+	var cab := MeshInstance3D.new()
+	var cab_box := BoxMesh.new()
+	cab_box.size = Vector3(2.3, 1.5, 2.0)
+	cab.mesh = cab_box
+	cab.position = Vector3(0, 2.75, -2)
+	cab.material_override = mat
+	truck.add_child(cab)
+
+
+func _create_chinook_helicopter() -> void:
+	"""Create CH-47 Chinook helicopter"""
+	_chinook = Node3D.new()
+	_chinook.name = "CH47_Chinook"
+	_chinook.position = _chinook_waiting_pos
+	add_child(_chinook)
+
+	# Try to load real Chinook model
+	var model_scene: PackedScene = load(CH47_CHINOOK_MODEL)
+	if model_scene:
+		var model: Node3D = model_scene.instantiate()
+		model.name = "ChinookModel"
+		_chinook.add_child(model)
+		_find_and_store_rotors(model)
+		print("[TestCombined] CH-47 Chinook loaded with model")
+	else:
+		_create_placeholder_chinook(_chinook)
+		print("[TestCombined] CH-47 Chinook using placeholder")
+
+	_chinook.set_meta("target_position", _chinook_waiting_pos)
+	_chinook_state = "WAITING"
+	_chinook_cargo = 0.0
+
+
+func _find_and_store_rotors(model: Node3D) -> void:
+	"""Find rotor nodes in the Chinook model for animation"""
+	var front_rotor: Node3D = _find_node_recursive(model, "rotor")
+	var rear_rotor: Node3D = _find_node_recursive(model, "rear")
+	if front_rotor:
+		_chinook.set_meta("front_rotor", front_rotor)
+	if rear_rotor:
+		_chinook.set_meta("rear_rotor", rear_rotor)
+
+
+func _find_node_recursive(node: Node, name_contains: String) -> Node3D:
+	"""Recursively find node containing name"""
+	if name_contains.to_lower() in node.name.to_lower():
+		if node is Node3D:
+			return node
+	for child in node.get_children():
+		var found: Node3D = _find_node_recursive(child, name_contains)
+		if found:
+			return found
+	return null
+
+
+func _create_placeholder_chinook(parent: Node3D) -> void:
+	"""Fallback placeholder Chinook geometry"""
+	# Fuselage
+	var fuselage := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(4.0, 3.0, 15.0)
+	fuselage.mesh = box
+	fuselage.position.y = 1.5
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.3, 0.35, 0.25)
+	fuselage.material_override = mat
+	parent.add_child(fuselage)
+
+	# Front rotor disc
+	var front_rotor := MeshInstance3D.new()
+	front_rotor.name = "FrontRotor"
+	var rotor_mesh := CylinderMesh.new()
+	rotor_mesh.top_radius = 9.0
+	rotor_mesh.bottom_radius = 9.0
+	rotor_mesh.height = 0.15
+	front_rotor.mesh = rotor_mesh
+	front_rotor.position = Vector3(0, 4.0, -5.0)
+
+	var rotor_mat := StandardMaterial3D.new()
+	rotor_mat.albedo_color = Color(0.2, 0.2, 0.2, 0.4)
+	rotor_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	front_rotor.material_override = rotor_mat
+	parent.add_child(front_rotor)
+	parent.set_meta("front_rotor", front_rotor)
+
+	# Rear rotor disc
+	var rear_rotor := MeshInstance3D.new()
+	rear_rotor.name = "RearRotor"
+	rear_rotor.mesh = rotor_mesh.duplicate()
+	rear_rotor.position = Vector3(0, 4.0, 5.0)
+	rear_rotor.material_override = rotor_mat
+	parent.add_child(rear_rotor)
+	parent.set_meta("rear_rotor", rear_rotor)
+
+
+func _register_depots_for_auto_roads() -> void:
+	"""Register rear depot as main base with SupplyChainManager"""
+	var supply_chain_manager: Node = get_node_or_null("/root/SupplyChainManager")
+	if not supply_chain_manager:
+		print("[TestCombined] SupplyChainManager not found - auto-roads disabled")
+		return
+
+	if not supply_chain_manager.has_method("manually_register_depot"):
+		return
+
+	if _rear_depot:
+		supply_chain_manager.manually_register_depot(_rear_depot)
+		print("[TestCombined] Registered rear depot as main base")
+		print("[TestCombined] When player builds a Supply Depot at firebase, auto-road will be created")
+
+
+func _on_road_construction_completed(from_pos: Vector3, to_pos: Vector3) -> void:
+	"""Called when SupplyChainManager completes a road - start the supply truck"""
+	print("[TestCombined] Road completed from %v to %v - starting supply run!" % [from_pos, to_pos])
+
+	# Find the firebase depot (the one that was just connected)
+	var supply_chain_manager: Node = get_node_or_null("/root/SupplyChainManager")
+	if supply_chain_manager and supply_chain_manager.has_method("get_all_depots"):
+		var depots: Array = supply_chain_manager.get_all_depots()
+		for depot: Node3D in depots:
+			if depot != _rear_depot:
+				_firebase_depot = depot
+				# Ensure depot has supply tracking metadata
+				if not _firebase_depot.has_meta("supply_current"):
+					_firebase_depot.set_meta("supply_current", INITIAL_FIREBASE_SUPPLY)
+				if not _firebase_depot.has_meta("supply_max"):
+					_firebase_depot.set_meta("supply_max", FIREBASE_DEPOT_CAPACITY)
+				print("[TestCombined] Firebase depot found: %s (%.0f/%.0f supply)" % [
+					depot.name,
+					_firebase_depot.get_meta("supply_current"),
+					_firebase_depot.get_meta("supply_max")
+				])
+				break
+
+	# Setup road waypoints for the truck
+	if _firebase_depot and _rear_depot:
+		_setup_road_waypoints(_rear_depot.global_position, _firebase_depot.global_position)
+
+	# Start the supply truck
+	_dispatch_convoy()
+
+
+# ============================================================================
+# CONVOY UPDATE LOOP
+# ============================================================================
+
+func _update_convoy_loop(delta: float) -> void:
+	"""Update all trucks in convoy"""
+	if _supply_trucks.is_empty():
+		return
+
+	for i in _supply_trucks.size():
+		var truck: Node3D = _supply_trucks[i]
+		if is_instance_valid(truck):
+			_update_single_truck(truck, delta, i)
+
+	# Update overall convoy state based on lead truck
+	if not _supply_trucks.is_empty() and is_instance_valid(_supply_trucks[0]):
+		_convoy_state = _supply_trucks[0].get_meta("state", "IDLE")
+
+
+func _update_single_truck(truck: Node3D, delta: float, convoy_index: int) -> void:
+	"""Update a single truck's movement"""
+	var state: String = truck.get_meta("state", "IDLE")
+	var cargo: float = truck.get_meta("cargo", 0.0)
+	var spline_dist: float = truck.get_meta("spline_distance", 0.0)
+	var returning: bool = truck.get_meta("returning", false)
+	var base_speed: float = truck.get_meta("base_speed", 12.0)
+
+	match state:
+		"IDLE":
+			pass  # Waiting for dispatch
+
+		"WAITING_FOR_ROAD":
+			pass  # Road not built yet - truck waits at depot
+
+		"LOADING":
+			cargo += 100.0 * delta
+			if cargo >= TRUCK_SUPPLY_AMOUNT:
+				cargo = TRUCK_SUPPLY_AMOUNT
+				state = "EN_ROUTE"
+				spline_dist = -convoy_index * 12.0  # Stagger convoy
+				returning = false
+			truck.set_meta("cargo", cargo)
+			truck.set_meta("state", state)
+			truck.set_meta("spline_distance", spline_dist)
+
+		"EN_ROUTE":
+			var spline: RefCounted = _return_spline if returning else _road_spline
+			if not spline or not spline.has_method("get_total_length"):
+				# No spline - use simple waypoint movement
+				_update_truck_waypoint_movement(truck, delta, convoy_index)
+				return
+
+			var spline_length: float = spline.get_total_length()
+
+			# Wait for convoy spacing
+			if spline_dist < 0:
+				spline_dist += base_speed * delta
+				truck.set_meta("spline_distance", spline_dist)
+				return
+
+			if spline_dist < spline_length:
+				spline_dist += base_speed * delta
+
+				var new_pos: Vector3 = spline.get_position_at_distance(spline_dist)
+				var tangent: Vector3 = spline.get_tangent_at_distance(spline_dist)
+
+				truck.position = new_pos
+				if tangent.length_squared() > 0.001:
+					truck.rotation.y = atan2(tangent.x, tangent.z)
+
+				truck.set_meta("spline_distance", spline_dist)
+			else:
+				# Reached destination
+				if returning:
+					state = "IDLE"
+					truck.position = _rear_depot.position + Vector3(convoy_index * 8, 0, 10)
+					truck.position.y = _get_terrain_height(truck.position.x, truck.position.z)
+					print("[TestCombined] Truck %d returned to depot" % convoy_index)
+				else:
+					state = "UNLOADING"
+					truck.position = _firebase_depot.position + Vector3(-25 - convoy_index * 8, 0, 0)
+					truck.position.y = _get_terrain_height(truck.position.x, truck.position.z)
+				spline_dist = 0.0
+				truck.set_meta("state", state)
+				truck.set_meta("spline_distance", spline_dist)
+
+		"UNLOADING":
+			var unload_amount: float = 100.0 * delta
+			cargo -= unload_amount
+
+			# Add to firebase depot
+			var fb_supply: float = _firebase_depot.get_meta("supply_current", 0.0)
+			var fb_max: float = _firebase_depot.get_meta("supply_max", FIREBASE_DEPOT_CAPACITY)
+			fb_supply = minf(fb_supply + unload_amount, fb_max)
+			_firebase_depot.set_meta("supply_current", fb_supply)
+
+			if cargo <= 0:
+				cargo = 0
+				state = "EN_ROUTE"
+				spline_dist = -convoy_index * 12.0
+				returning = true
+				print("[TestCombined] Truck %d unloaded, returning" % convoy_index)
+
+			truck.set_meta("cargo", cargo)
+			truck.set_meta("state", state)
+			truck.set_meta("returning", returning)
+			truck.set_meta("spline_distance", spline_dist)
+
+
+func _update_truck_waypoint_movement(truck: Node3D, delta: float, convoy_index: int) -> void:
+	"""Simple waypoint movement when no spline available"""
+	var returning: bool = truck.get_meta("returning", false)
+	var waypoint_idx: int = truck.get_meta("waypoint_idx", 0)
+	var base_speed: float = truck.get_meta("base_speed", 12.0)
+
+	var waypoints: Array[Vector3] = _road_waypoints.duplicate()
+	if returning:
+		waypoints.reverse()
+
+	if waypoint_idx >= waypoints.size():
+		# Reached end
+		var state: String = "IDLE" if returning else "UNLOADING"
+		truck.set_meta("state", state)
+		truck.set_meta("waypoint_idx", 0)
+		return
+
+	var target: Vector3 = waypoints[waypoint_idx]
+	var direction: Vector3 = (target - truck.position).normalized()
+	var distance: float = truck.position.distance_to(target)
+
+	if distance > 2.0:
+		truck.position += direction * base_speed * delta
+		truck.position.y = _get_terrain_height(truck.position.x, truck.position.z)
+		var look_dir := Vector3(direction.x, 0, direction.z)
+		if look_dir.length() > 0.1:
+			truck.rotation.y = atan2(look_dir.x, look_dir.z)
+	else:
+		truck.set_meta("waypoint_idx", waypoint_idx + 1)
+
+
+func _dispatch_convoy() -> void:
+	"""Manually dispatch truck convoy for a supply run"""
+	if _supply_trucks.is_empty():
+		print("[TestCombined] No trucks in convoy")
+		return
+
+	for i in _supply_trucks.size():
+		var truck: Node3D = _supply_trucks[i]
+		if is_instance_valid(truck):
+			truck.set_meta("state", "LOADING")
+			truck.set_meta("cargo", 0.0)
+			truck.set_meta("spline_distance", 0.0)
+			truck.set_meta("returning", false)
+			truck.set_meta("waypoint_idx", 0)
+			if _rear_depot:
+				truck.position = _rear_depot.position + Vector3(i * 8, 0, 10)
+				truck.position.y = _get_terrain_height(truck.position.x, truck.position.z)
+
+	_convoy_state = "LOADING"
+	print("[TestCombined] Truck convoy dispatched (%d trucks)" % _supply_trucks.size())
+
+
+# ============================================================================
+# CHINOOK HELICOPTER UPDATE LOOP
+# ============================================================================
+
+func _update_chinook_loop(delta: float) -> void:
+	"""Update CH-47 Chinook helicopter movement and state"""
+	if not is_instance_valid(_chinook):
+		return
+
+	_update_chinook_rotors(delta)
+
+	match _chinook_state:
+		"WAITING":
+			_chinook_hover_at_position(delta, _chinook_waiting_pos)
+
+		"FLYING_TO_DEPOT":
+			var depot_pos := _rear_depot.position + Vector3(15, CHINOOK_CRUISE_ALTITUDE, 0) if _rear_depot else _chinook_waiting_pos
+			if _chinook_fly_toward(delta, depot_pos, CHINOOK_SPEED):
+				_chinook_state = "LANDING_AT_DEPOT"
+
+		"LANDING_AT_DEPOT":
+			var ground_pos := _rear_depot.position + Vector3(15, 2.0, 0) if _rear_depot else _chinook_waiting_pos
+			if _chinook_descend_to(delta, ground_pos):
+				_chinook_state = "LOADING"
+
+		"LOADING":
+			_chinook_cargo += 200.0 * delta
+			if _chinook_cargo >= HELI_SUPPLY_AMOUNT:
+				_chinook_cargo = HELI_SUPPLY_AMOUNT
+				_chinook_state = "TAKING_OFF_DEPOT"
+
+		"TAKING_OFF_DEPOT":
+			var takeoff_pos := _rear_depot.position + Vector3(15, CHINOOK_CRUISE_ALTITUDE, 0) if _rear_depot else _chinook_waiting_pos
+			if _chinook_ascend_to(delta, takeoff_pos):
+				_chinook_state = "FLYING_TO_LZ"
+
+		"FLYING_TO_LZ":
+			var lz_pos := _firebase_depot.position + Vector3(-15, CHINOOK_CRUISE_ALTITUDE, 0) if _firebase_depot else _chinook_waiting_pos
+			if _chinook_fly_toward(delta, lz_pos, CHINOOK_SPEED):
+				_chinook_state = "LANDING_AT_LZ"
+
+		"LANDING_AT_LZ":
+			var ground_pos := _firebase_depot.position + Vector3(-15, 2.0, 0) if _firebase_depot else _chinook_waiting_pos
+			if _chinook_descend_to(delta, ground_pos):
+				_chinook_state = "UNLOADING"
+
+		"UNLOADING":
+			var unload_amount: float = 200.0 * delta
+			_chinook_cargo -= unload_amount
+
+			# Add to firebase depot
+			if _firebase_depot:
+				var fb_supply: float = _firebase_depot.get_meta("supply_current", 0.0)
+				var fb_max: float = _firebase_depot.get_meta("supply_max", FIREBASE_DEPOT_CAPACITY)
+				fb_supply = minf(fb_supply + unload_amount, fb_max)
+				_firebase_depot.set_meta("supply_current", fb_supply)
+
+			if _chinook_cargo <= 0:
+				_chinook_cargo = 0
+				_chinook_state = "TAKING_OFF_LZ"
+
+		"TAKING_OFF_LZ":
+			var takeoff_pos := _firebase_depot.position + Vector3(-15, CHINOOK_CRUISE_ALTITUDE, 0) if _firebase_depot else _chinook_waiting_pos
+			if _chinook_ascend_to(delta, takeoff_pos):
+				_chinook_state = "RETURNING"
+
+		"RETURNING":
+			if _chinook_fly_toward(delta, _chinook_waiting_pos, CHINOOK_SPEED):
+				_chinook_state = "WAITING"
+				print("[TestCombined] Chinook supply run complete")
+
+
+func _update_chinook_rotors(delta: float) -> void:
+	"""Spin Chinook rotors"""
+	var target_speed: float = CHINOOK_ROTOR_MAX_SPEED
+	if _chinook_state == "WAITING":
+		target_speed = CHINOOK_ROTOR_MAX_SPEED * 0.8
+	_chinook_rotor_speed = lerpf(_chinook_rotor_speed, target_speed, delta * 2.0)
+
+	var front_rotor: Node3D = _chinook.get_meta("front_rotor", null)
+	var rear_rotor: Node3D = _chinook.get_meta("rear_rotor", null)
+
+	if is_instance_valid(front_rotor):
+		front_rotor.rotate_y(_chinook_rotor_speed * delta)
+	if is_instance_valid(rear_rotor):
+		rear_rotor.rotate_y(-_chinook_rotor_speed * delta)
+
+
+func _chinook_hover_at_position(delta: float, target: Vector3) -> void:
+	"""Gentle hover drift at position"""
+	var diff := target - _chinook.position
+	if diff.length() > 1.0:
+		_chinook.position = _chinook.position.lerp(target, delta * 0.5)
+
+
+func _chinook_fly_toward(delta: float, target: Vector3, speed: float) -> bool:
+	"""Fly toward target, returns true when arrived"""
+	var direction: Vector3 = (target - _chinook.position).normalized()
+	var distance: float = _chinook.position.distance_to(target)
+
+	if distance > 5.0:
+		var velocity := direction * speed
+		if distance < 30.0:
+			velocity *= distance / 30.0
+		_chinook.position += velocity * delta
+
+		var look_dir := Vector3(direction.x, 0, direction.z)
+		if look_dir.length() > 0.1:
+			var target_rot: float = atan2(look_dir.x, look_dir.z)
+			_chinook.rotation.y = lerp_angle(_chinook.rotation.y, target_rot, delta * 2.0)
+		return false
+	else:
+		_chinook.position = target
+		return true
+
+
+func _chinook_descend_to(delta: float, target: Vector3) -> bool:
+	"""Descend vertically, returns true when landed"""
+	var descent_speed := 6.0
+	if _chinook.position.y > target.y + 0.5:
+		_chinook.position.y -= descent_speed * delta
+		_chinook.position.x = lerpf(_chinook.position.x, target.x, delta * 2.0)
+		_chinook.position.z = lerpf(_chinook.position.z, target.z, delta * 2.0)
+		return false
+	else:
+		_chinook.position = target
+		return true
+
+
+func _chinook_ascend_to(delta: float, target: Vector3) -> bool:
+	"""Ascend vertically, returns true when at altitude"""
+	var ascent_speed := 8.0
+	if _chinook.position.y < target.y - 0.5:
+		_chinook.position.y += ascent_speed * delta
+		return false
+	else:
+		_chinook.position.y = target.y
+		return true
+
+
+func _request_chinook_supply() -> void:
+	"""Request CH-47 Chinook supply run"""
+	if _chinook_state != "WAITING":
+		print("[TestCombined] Chinook is busy (state: %s)" % _chinook_state)
+		return
+
+	_chinook_state = "FLYING_TO_DEPOT"
+	_chinook_cargo = 0.0
+	print("[TestCombined] Chinook dispatched for supply run (%.0f capacity)" % HELI_SUPPLY_AMOUNT)
+
+
+# ============================================================================
+# SQUAD SUPPLY CONSUMPTION & RESUPPLY
+# ============================================================================
+
+const SUPPLY_CONSUMPTION_RATE := 2.0  # Supply consumed per second
+const SUPPLY_RESUPPLY_RATE := 10.0  # Supply restored per second when near depot
+const SUPPLY_RESUPPLY_RANGE := 50.0  # Range to receive resupply from depot
+
+func _update_squad_supply(delta: float) -> void:
+	"""Update supply consumption and resupply for combat squads"""
+	if _combat_squads.is_empty():
+		return
+
+	for squad: Node3D in _combat_squads:
+		if not is_instance_valid(squad):
+			continue
+
+		var current_supply: float = squad.get_meta("supply_current", 100.0)
+		var max_supply: float = squad.get_meta("supply_max", 100.0)
+
+		# Consume supply over time (combat operations)
+		current_supply = maxf(0.0, current_supply - SUPPLY_CONSUMPTION_RATE * delta)
+
+		# Check if near firebase depot for resupply
+		if _firebase_depot and is_instance_valid(_firebase_depot):
+			var dist_to_depot: float = squad.global_position.distance_to(_firebase_depot.global_position)
+			if dist_to_depot <= SUPPLY_RESUPPLY_RANGE:
+				var depot_supply: float = _firebase_depot.get_meta("supply_current", 0.0)
+				if depot_supply > 0 and current_supply < max_supply:
+					var resupply_amount: float = minf(SUPPLY_RESUPPLY_RATE * delta, depot_supply)
+					resupply_amount = minf(resupply_amount, max_supply - current_supply)
+					current_supply += resupply_amount
+					depot_supply -= resupply_amount
+					_firebase_depot.set_meta("supply_current", depot_supply)
+
+		squad.set_meta("supply_current", current_supply)
+
+
+func _get_squad_supply_status() -> String:
+	"""Get formatted supply status for HUD"""
+	var status := ""
+	for squad: Node3D in _combat_squads:
+		if not is_instance_valid(squad):
+			continue
+		var supply: float = squad.get_meta("supply_current", 0.0)
+		var max_supply: float = squad.get_meta("supply_max", 100.0)
+		var pct: int = int(supply / max_supply * 100.0) if max_supply > 0 else 0
+		status += "  %s: %d%%\n" % [squad.name, pct]
+	return status
