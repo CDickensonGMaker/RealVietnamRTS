@@ -42,9 +42,8 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.PSP_HELIPAD: "res://assets/models/structures/airfield/psp_helipad.glb",
 	BuildingData.BuildingType.VIP_HELIPAD: "res://assets/models/structures/converted/helipad.glb",  # Fallback to regular helipad
 	BuildingData.BuildingType.HELICOPTER_REVETMENT: "res://assets/models/structures/airfield/aircraft_revetment.glb",  # Use aircraft revetment
-	BuildingData.BuildingType.AMMO_BUNKER: "res://assets/models/structures/firebase/ammo_bunker.glb",
-	BuildingData.BuildingType.FUEL_DEPOT: "res://assets/models/structures/converted/fuel_depot.glb",
-	BuildingData.BuildingType.FUEL_POINT: "res://assets/models/structures/converted/fuel_depot.glb",  # Fallback to fuel depot
+	# REMOVED: AMMO_BUNKER, FUEL_DEPOT - use SUPPLY_DEPOT instead
+	BuildingData.BuildingType.FUEL_POINT: "res://assets/models/structures/converted/fuel_depot.glb",
 	BuildingData.BuildingType.MEDICAL_STATION: "res://assets/models/structures/firebase/aid_station.glb",
 	BuildingData.BuildingType.TOC: "res://assets/models/structures/firebase/toc.glb",
 	BuildingData.BuildingType.COMMO_BUNKER: "res://assets/models/structures/firebase/commo_bunker.glb",
@@ -102,7 +101,7 @@ const BUILDING_MODELS: Dictionary = {
 	BuildingData.BuildingType.AIRCRAFT_HANGAR: "res://assets/models/structures/airfield/hangar.glb",
 	BuildingData.BuildingType.MAINTENANCE_SHOP: "res://assets/models/structures/airfield/maintenance_shop.glb",
 	BuildingData.BuildingType.CONTROL_TOWER: "res://assets/models/structures/airfield/control_tower.glb",
-	BuildingData.BuildingType.RADAR_DOME: "res://assets/models/structures/airfield/radar_dome.glb",
+	# REMOVED: RADAR_DOME - out of scope
 	BuildingData.BuildingType.OPERATIONS_BUILDING: "res://assets/models/structures/airfield/operations_building.glb",
 	BuildingData.BuildingType.POL_STORAGE: "res://assets/models/structures/airfield/pol_storage.glb",
 	BuildingData.BuildingType.FIRE_STATION: "res://assets/models/structures/airfield/fire_station.glb",
@@ -422,7 +421,7 @@ func _create_building() -> Node3D:
 						model_instance.scale = Vector3(1.3, 1.3, 1.3)  # 30% larger - model is too small
 					BuildingData.BuildingType.BUNKER:
 						model_instance.scale = Vector3(1.25, 1.25, 1.25)  # 25% larger
-					BuildingData.BuildingType.FUEL_DEPOT, BuildingData.BuildingType.FUEL_POINT:
+					BuildingData.BuildingType.FUEL_POINT:
 						model_instance.scale = Vector3(0.5, 0.5, 0.5)  # 50% smaller - Spring 1944 model is oversized
 
 				building.add_child(model_instance)

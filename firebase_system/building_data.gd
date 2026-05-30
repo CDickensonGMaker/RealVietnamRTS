@@ -7,6 +7,9 @@ class_name BuildingData
 # Self-reference for static factory methods (avoids circular reference during parsing)
 const _Self := preload("res://firebase_system/building_data.gd")
 
+# Static cache for BuildingData instances (avoids repeated allocations)
+static var _building_data_cache: Dictionary = {}
+
 # =============================================================================
 # BUILDING TYPE ENUMERATION
 # =============================================================================
@@ -33,8 +36,8 @@ enum BuildingType {
 	PSP_HELIPAD,            # 11 - Steel matting landing pad
 	VIP_HELIPAD,            # 12 - Small dedicated pad
 	HELICOPTER_REVETMENT,   # 13 - Protective sandbag walls for helos
-	AMMO_BUNKER,            # 14 - Ammunition resupply point
-	FUEL_DEPOT,             # 15 - Vehicle/heli fuel
+	_REMOVED_14,            # 14 - (removed: was AMMO_BUNKER)
+	_REMOVED_15,            # 15 - (removed: was FUEL_DEPOT)
 	FUEL_POINT,             # 16 - JP-4 dispensing station
 	MEDICAL_STATION,        # 17 - Casualty treatment (Aid Station)
 	TOC,                    # 18 - Tactical Operations Center (Command Bunker)
@@ -93,7 +96,7 @@ enum BuildingType {
 	AIRCRAFT_HANGAR,        # 55 - Large maintenance building
 	MAINTENANCE_SHOP,       # 56 - Engine/airframe repair
 	CONTROL_TOWER,          # 57 - Air traffic control
-	RADAR_DOME,             # 58 - Ground control approach
+	_REMOVED_58,            # 58 - (removed: was RADAR_DOME)
 	OPERATIONS_BUILDING,    # 59 - Flight planning/briefing
 	POL_STORAGE,            # 60 - Fuel tanks and pumps
 	FIRE_STATION,           # 61 - Crash/rescue equipment
@@ -301,7 +304,10 @@ enum BuildingCategory {
 # =============================================================================
 
 static func get_building_data(type: BuildingType) -> BuildingData:
-	"""Get building data for a building type"""
+	"""Get building data for a building type (cached to avoid repeated allocations)"""
+	if _building_data_cache.has(type):
+		return _building_data_cache[type]
+
 	var data := _Self.new()
 	data.building_type = type
 
@@ -561,30 +567,8 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.cover_value = 0.6
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
 
-		BuildingType.AMMO_BUNKER:
-			data.display_name = "Ammo Bunker"
-			data.description = "Ammunition resupply point"
-			data.category = BuildingCategory.FIREBASE_SUPPORT
-			data.supply_cost = 45
-			data.stage_work = [40.0, 60.0, 40.0]
-			data.health = 300.0
-			data.armor = 10.0
-			data.footprint_size = Vector2(6, 4)
-			data.height = 3.0
-			data.is_explosive = true
-			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.EXPLODED]
-
-		BuildingType.FUEL_DEPOT:
-			data.display_name = "Water Supply Point"
-			data.description = "Water storage and distribution for firebase operations"
-			data.category = BuildingCategory.FIREBASE_SUPPORT
-			data.supply_cost = 40
-			data.stage_work = [35.0, 50.0, 35.0]
-			data.health = 150.0
-			data.footprint_size = Vector2(5, 5)
-			data.height = 3.0
-			data.is_water_source = true
-			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
+		# REMOVED: BuildingType.AMMO_BUNKER - use SUPPLY_DEPOT instead
+		# REMOVED: BuildingType.FUEL_DEPOT - use SUPPLY_DEPOT instead
 
 		BuildingType.FUEL_POINT:
 			data.display_name = "Fuel Point"
@@ -1188,18 +1172,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.construction_slots = 2
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
-		BuildingType.RADAR_DOME:
-			data.display_name = "Radar Dome"
-			data.description = "Ground control approach radar"
-			data.category = BuildingCategory.AIRFIELD
-			data.supply_cost = 180
-			data.stage_work = [90.0, 140.0, 90.0]
-			data.health = 250.0
-			data.sight_range = 200.0
-			data.footprint_size = Vector2(8, 8)
-			data.height = 8.0
-			data.construction_slots = 2
-			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED]
+		# REMOVED: BuildingType.RADAR_DOME - out of scope
 
 		BuildingType.OPERATIONS_BUILDING:
 			data.display_name = "Operations Building"
@@ -2059,6 +2032,7 @@ static func get_building_data(type: BuildingType) -> BuildingData:
 			data.can_place_anywhere = true  # Bridges span water, bypass firebase zone
 			data.destruction_states = [DestructionState.INTACT, DestructionState.DAMAGED, DestructionState.DESTROYED]
 
+	_building_data_cache[type] = data
 	return data
 
 
@@ -2107,8 +2081,6 @@ static func get_buildings_by_category(category: BuildingCategory) -> Array[Build
 				BuildingType.PSP_HELIPAD,
 				BuildingType.VIP_HELIPAD,
 				BuildingType.HELICOPTER_REVETMENT,
-				BuildingType.AMMO_BUNKER,
-				BuildingType.FUEL_DEPOT,
 				BuildingType.FUEL_POINT,
 				BuildingType.MEDICAL_STATION,
 				BuildingType.TOC,
@@ -2162,7 +2134,6 @@ static func get_buildings_by_category(category: BuildingCategory) -> Array[Build
 				BuildingType.AIRCRAFT_HANGAR,
 				BuildingType.MAINTENANCE_SHOP,
 				BuildingType.CONTROL_TOWER,
-				BuildingType.RADAR_DOME,
 				BuildingType.OPERATIONS_BUILDING,
 				BuildingType.POL_STORAGE,
 				BuildingType.FIRE_STATION,

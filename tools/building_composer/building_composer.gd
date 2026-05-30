@@ -1545,7 +1545,7 @@ func _populate_building_types() -> void:
 	building_type_option.add_item("Watchtower", BuildingData.BuildingType.WATCHTOWER)
 	building_type_option.add_separator("US Support")
 	building_type_option.add_item("Helipad", BuildingData.BuildingType.HELIPAD)
-	building_type_option.add_item("Ammo Bunker", BuildingData.BuildingType.AMMO_BUNKER)
+	building_type_option.add_item("Supply Depot", BuildingData.BuildingType.SUPPLY_DEPOT)
 	building_type_option.add_item("Medical Station", BuildingData.BuildingType.MEDICAL_STATION)
 	building_type_option.add_item("TOC", BuildingData.BuildingType.TOC)
 

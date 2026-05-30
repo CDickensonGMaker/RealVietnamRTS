@@ -357,7 +357,7 @@ func _handle_hotkey(event: InputEventKey) -> void:
 		KEY_7:
 			_start_building_placement(BuildingData.BuildingType.HELIPAD)
 		KEY_8:
-			_start_building_placement(BuildingData.BuildingType.AMMO_BUNKER)
+			_start_building_placement(BuildingData.BuildingType.SUPPLY_DEPOT)
 		KEY_9:
 			_start_building_placement(BuildingData.BuildingType.MEDICAL_STATION)
 

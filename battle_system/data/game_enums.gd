@@ -143,8 +143,8 @@ enum BuildingType {
 	PSP_HELIPAD,            # 11 - Steel matting landing pad
 	VIP_HELIPAD,            # 12 - Small dedicated pad
 	HELICOPTER_REVETMENT,   # 13 - Protective sandbag walls for helos
-	AMMO_BUNKER,            # 14 - Ammunition resupply point
-	FUEL_DEPOT,             # 15 - Vehicle/heli fuel
+	_REMOVED_14,            # 14 - (removed: was AMMO_BUNKER)
+	_REMOVED_15,            # 15 - (removed: was FUEL_DEPOT)
 	FUEL_POINT,             # 16 - JP-4 dispensing station
 	MEDICAL_STATION,        # 17 - Aid Station
 	TOC,                    # 18 - Tactical Operations Center (HQ)
@@ -203,7 +203,7 @@ enum BuildingType {
 	AIRCRAFT_HANGAR,        # 55 - Large maintenance building
 	MAINTENANCE_SHOP,       # 56 - Engine/airframe repair
 	CONTROL_TOWER,          # 57 - Air traffic control
-	RADAR_DOME,             # 58 - Ground control approach
+	_REMOVED_58,            # 58 - (removed: was RADAR_DOME)
 	OPERATIONS_BUILDING,    # 59 - Flight planning/briefing
 	POL_STORAGE,            # 60 - Fuel tanks and pumps
 	FIRE_STATION,           # 61 - Crash/rescue equipment
@@ -283,6 +283,11 @@ enum BuildingType {
 	SHOP_HOUSE,             # 111 - Two-story merchant building
 	MARKET_STALL,           # 112 - Simple vendor booth
 	FOOD_VENDOR_CART,       # 113 - Mobile street food
+
+	# -------------------------------------------------------------------------
+	# SUPPLY CHAIN (114+)
+	# -------------------------------------------------------------------------
+	SUPPLY_DEPOT,           # 114 - General supply depot (ammo + fuel)
 }
 
 # =============================================================================

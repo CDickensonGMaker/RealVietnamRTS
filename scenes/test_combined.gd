@@ -39,7 +39,6 @@ const HOOTCH_MODEL := "res://assets/models/structures/firebase/hootch.glb"
 const SANDBAG_BUNKER_MODEL := "res://assets/models/structures/firebase/sandbag_bunker.glb"
 const TOC_MODEL := "res://assets/models/structures/firebase/toc.glb"
 const MG_NEST_MODEL := "res://assets/models/structures/firebase/mg_nest.glb"
-const AMMO_BUNKER_MODEL := "res://assets/models/structures/firebase/ammo_bunker.glb"
 
 # Unit data
 var us_rifle_data: Resource = preload("res://battle_system/data/units/us_rifle_platoon.tres")
@@ -548,10 +547,7 @@ func _spawn_hq_structures(hq_pos: Vector3) -> void:
 	var mg_pos := hq_pos + Vector3(0, 0, -35)
 	_spawn_structure(MG_NEST_MODEL, mg_pos, 0, "HQ_MG_Nest")
 
-	# Ammo bunker
-	_spawn_structure(AMMO_BUNKER_MODEL, hq_pos + Vector3(-22, 0, 8), 0, "HQ_Ammo")
-
-	print("[TestCombined] Spawned 8 HQ structures (includes TOC)")
+	print("[TestCombined] Spawned 7 HQ structures (includes TOC)")
 
 
 func _spawn_structure(model_path: String, pos: Vector3, rotation_deg: float, struct_name: String) -> Node3D:
