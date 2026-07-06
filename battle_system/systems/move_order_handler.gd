@@ -11,6 +11,15 @@ var _attack_move_pending: bool = false
 ## Move marker manager reference
 var _marker_manager: Node = null
 
+## Pending garrison orders resolved on arrival: squad(Node3D) -> component(Node)
+var _pending_garrisons: Dictionary = {}
+
+## Squads we've connected reached_destination on (for _exit_tree cleanup)
+var _garrison_signal_squads: Array[Node3D] = []
+
+## Last building selected (for G-to-exit garrison of a clicked structure)
+var _selected_building: Node3D = null
+
 ## Emitted when attack-move mode changes
 signal attack_move_mode_changed(enabled: bool)
 
@@ -20,7 +29,31 @@ func _ready() -> void:
 	_marker_manager = MoveMarkerManager.new()
 	_marker_manager.name = "MoveMarkerManager"
 	add_child(_marker_manager)
+
+	# Track the selected building so G can eject its garrison
+	if BattleSignals and BattleSignals.has_signal("building_selected"):
+		BattleSignals.building_selected.connect(_on_building_selected)
+
 	print("[MoveOrderHandler] Initialized with move markers")
+
+
+func _exit_tree() -> void:
+	# Disconnect building selection listener
+	if BattleSignals and BattleSignals.has_signal("building_selected"):
+		if BattleSignals.building_selected.is_connected(_on_building_selected):
+			BattleSignals.building_selected.disconnect(_on_building_selected)
+
+	# Disconnect any per-squad arrival listeners we established
+	for squad: Node3D in _garrison_signal_squads:
+		if is_instance_valid(squad) and squad.has_signal("reached_destination"):
+			if squad.reached_destination.is_connected(_on_squad_reached_destination):
+				squad.reached_destination.disconnect(_on_squad_reached_destination)
+	_garrison_signal_squads.clear()
+	_pending_garrisons.clear()
+
+
+func _on_building_selected(building: Node3D) -> void:
+	_selected_building = building if is_instance_valid(building) else null
 
 
 func _input(event: InputEvent) -> void:
@@ -328,20 +361,10 @@ func _handle_ungarrison() -> void:
 		if not is_instance_valid(unit):
 			continue
 
-		# Check if this is a garrisoned structure (Bunker, building)
-		if unit.is_in_group("bunkers") or unit.is_in_group("garrisonable_structures"):
-			# Unload all units from structure
-			if unit.has_method("unload_all"):
-				var exited: Array = unit.unload_all()
-				ungarrisoned_count += exited.size()
-				print("[MoveOrderHandler] Unloaded %d units from %s" % [exited.size(), unit.name])
-			elif unit.has_method("exit_all"):
-				var exited: Array = unit.exit_all()
-				ungarrisoned_count += exited.size()
-				print("[MoveOrderHandler] Unloaded %d units from %s" % [exited.size(), unit.name])
-			continue
+		# Selected structure (Bunker / garrisonable) - eject its whole garrison
+		ungarrisoned_count += _eject_from_structure(unit)
 
-		# Check if this is a garrisoned unit
+		# Selected garrisoned squad - exit it individually
 		if unit.has_method("get") and unit.get("is_garrisoned"):
 			if unit.is_garrisoned:
 				var structure = unit.get("garrison_structure")
@@ -350,8 +373,30 @@ func _handle_ungarrison() -> void:
 					ungarrisoned_count += 1
 					print("[MoveOrderHandler] %s exited garrison" % unit.name)
 
+	# Buildings aren't part of the unit selection - eject the last clicked building too
+	if is_instance_valid(_selected_building):
+		ungarrisoned_count += _eject_from_structure(_selected_building)
+
 	if ungarrisoned_count > 0:
 		print("[MoveOrderHandler] Ungarrisoned %d units (G key)" % ungarrisoned_count)
+
+
+func _eject_from_structure(node: Node) -> int:
+	"""Eject every garrisoned unit from a structure (or its child component). Returns count."""
+	var comp: Node = _resolve_garrison_component(node)
+	if not comp:
+		return 0
+	if comp.has_method("unload_all"):
+		var exited: Array = comp.unload_all()
+		if exited.size() > 0:
+			print("[MoveOrderHandler] Unloaded %d units from %s" % [exited.size(), comp.name])
+		return exited.size()
+	if comp.has_method("exit_all"):
+		var exited: Array = comp.exit_all()
+		if exited.size() > 0:
+			print("[MoveOrderHandler] Unloaded %d units from %s" % [exited.size(), comp.name])
+		return exited.size()
+	return 0
 
 func _raycast_garrisonable(screen_pos: Vector2) -> Node3D:
 	"""Raycast to find garrisonable structure under cursor (bunker, building)"""
@@ -398,6 +443,9 @@ func _find_garrisonable_parent(node: Node) -> Node3D:
 			return current as Node3D
 		# Check for GarrisonableStructure component
 		if current.has_method("can_enter") or current.has_method("load_squad"):
+			return current as Node3D
+		# Factory-built buildings carry the garrison component as a CHILD node
+		if current is Node3D and current.get_node_or_null("GarrisonableStructure") != null:
 			return current as Node3D
 		current = current.get_parent()
 	return null
@@ -538,7 +586,13 @@ func _is_worker(unit: Node) -> bool:
 
 
 func _issue_garrison_orders(units: Array[Node3D], structure: Node3D) -> void:
-	"""Issue garrison orders to infantry units"""
+	"""Issue garrison orders: move the squad to the structure and enter on ARRIVAL.
+	No 5m pre-check, no blind timer - entry is driven by the squad's reached_destination
+	signal (capacity/range are re-validated by the structure's enter/load at that point)."""
+	var comp: Node = _resolve_garrison_component(structure)
+	if not comp:
+		return
+
 	var garrisoned_count: int = 0
 
 	for unit in units:
@@ -556,50 +610,72 @@ func _issue_garrison_orders(units: Array[Node3D], structure: Node3D) -> void:
 				print("[MoveOrderHandler] %s cannot garrison (vehicle)" % unit.name)
 				continue
 
-		# Stop any current activities
+		# Capacity check only (distance is resolved by arrival, not now)
+		if not _has_garrison_capacity(comp):
+			print("[MoveOrderHandler] %s cannot garrison %s (full)" % [unit.name, structure.name])
+			continue
+
+		# Stop any current activities and move to the structure
 		if unit.has_method("stop_attack"):
 			unit.stop_attack()
+		if not unit.has_method("move_to"):
+			continue
+		unit.move_to(comp.global_position)
 
-		# Try to garrison based on structure type
-		var success: bool = false
+		# Record the pending garrison and listen for arrival
+		_pending_garrisons[unit] = comp
+		if unit.has_signal("reached_destination"):
+			if not unit.reached_destination.is_connected(_on_squad_reached_destination):
+				unit.reached_destination.connect(_on_squad_reached_destination)
+				_garrison_signal_squads.append(unit)
 
-		# Check for Bunker.load_squad()
-		if structure.has_method("load_squad"):
-			if structure.has_method("can_load") and structure.can_load(unit):
-				# Move to bunker first, then load
-				if unit.has_method("move_to"):
-					unit.move_to(structure.global_position)
-				# Queue garrison after arrival (use tween callback)
-				var tween := create_tween()
-				tween.tween_callback(func():
-					if is_instance_valid(unit) and is_instance_valid(structure):
-						if structure.load_squad(unit):
-							print("[MoveOrderHandler] %s garrisoned in %s" % [unit.name, structure.name])
-				).set_delay(2.0)  # Arrival delay estimate
-				success = true
-			else:
-				print("[MoveOrderHandler] %s cannot garrison in %s (full or too far)" % [unit.name, structure.name])
-
-		# Check for GarrisonableStructure.enter()
-		elif structure.has_method("enter"):
-			if structure.has_method("can_enter") and structure.can_enter(unit):
-				if unit.has_method("move_to"):
-					unit.move_to(structure.global_position)
-				var tween := create_tween()
-				tween.tween_callback(func():
-					if is_instance_valid(unit) and is_instance_valid(structure):
-						if structure.enter(unit):
-							print("[MoveOrderHandler] %s entered %s" % [unit.name, structure.name])
-				).set_delay(2.0)
-				success = true
-			else:
-				print("[MoveOrderHandler] %s cannot enter %s (full or too far)" % [unit.name, structure.name])
-
-		if success:
-			garrisoned_count += 1
+		garrisoned_count += 1
 
 	if garrisoned_count > 0:
 		print("[MoveOrderHandler] Garrison order issued to %d units" % garrisoned_count)
-		# Spawn marker at structure
 		if _marker_manager:
-			_marker_manager.spawn_marker(structure.global_position, true, false)
+			_marker_manager.spawn_marker(comp.global_position, true, false)
+
+
+func _on_squad_reached_destination(squad: Node3D) -> void:
+	"""Resolve a pending garrison when the squad actually arrives at the structure."""
+	if not _pending_garrisons.has(squad):
+		return
+
+	var comp: Node = _pending_garrisons[squad]
+	_pending_garrisons.erase(squad)
+
+	if not is_instance_valid(squad) or not is_instance_valid(comp):
+		return
+
+	# The structure's enter/load re-validates range (5m) + capacity. If the squad was
+	# diverted elsewhere it simply won't be in range and entry is a no-op.
+	if comp.has_method("load_squad"):
+		if comp.load_squad(squad):
+			print("[MoveOrderHandler] %s garrisoned in %s" % [squad.name, comp.name])
+	elif comp.has_method("enter"):
+		if comp.enter(squad):
+			print("[MoveOrderHandler] %s entered %s" % [squad.name, comp.name])
+
+
+func _resolve_garrison_component(node: Node) -> Node:
+	"""Return the node that actually implements the garrison API (enter/load_squad).
+	Factory-built buildings carry a GarrisonableStructure CHILD, so a raw building
+	resolves to that child."""
+	if not is_instance_valid(node):
+		return null
+	if node.has_method("enter") or node.has_method("load_squad"):
+		return node
+	var child: Node = node.get_node_or_null("GarrisonableStructure")
+	if child and child.has_method("enter"):
+		return child
+	return null
+
+
+func _has_garrison_capacity(comp: Node) -> bool:
+	"""Capacity-only check (no distance), for issuing a move-to-garrison order."""
+	if comp.has_method("is_garrisonable"):
+		return comp.is_garrisonable()
+	if comp.has_method("get_available_slots"):
+		return comp.get_available_slots() > 0
+	return true

@@ -513,8 +513,20 @@ func _fire_weapon() -> void:
 	if not _current_target:
 		return
 
-	# Consume ammo
-	current_ammo -= ammo_per_shot
+	# CombatManager.consume_ammo() is the single ammo owner (matches the squad path,
+	# see squad.gd combat: "CombatManager.fire_weapon handles ammo consumption").
+	# It decrements our current_ammo and returns false when depleted.
+	var fired: bool = false
+	if _combat_manager and _combat_manager.has_method("fire_weapon"):
+		fired = _combat_manager.fire_weapon(self, _current_target, weapon_id)
+
+	if not fired:
+		# Out of ammo (or no CombatManager). Throttle retries so a low-ammo structure
+		# (0 < ammo < per-shot cost) doesn't hammer consume_ammo every frame.
+		_fire_cooldown = 1.0
+		if current_ammo <= 0:
+			_on_ammo_depleted()
+		return
 
 	# Set cooldown based on ROF
 	if _weapon_data:
@@ -522,10 +534,6 @@ func _fire_weapon() -> void:
 		_fire_cooldown = 60.0 / maxf(rof, 1.0)  # Convert RPM to seconds between shots
 	else:
 		_fire_cooldown = 0.5  # Default half second
-
-	# Use CombatManager for damage resolution
-	if _combat_manager and _combat_manager.has_method("fire_weapon"):
-		_combat_manager.fire_weapon(self, _current_target, weapon_id)
 
 	# Emit signal
 	weapon_fired.emit(_current_target, weapon_id)
@@ -831,6 +839,19 @@ func _create_guard_tower_mesh() -> void:
 func get_faction() -> int:
 	"""Return owner faction for targeting systems."""
 	return owner_faction
+
+
+func set_faction(new_faction: int) -> void:
+	"""Set owner faction explicitly (called by BuildingComponentFactory).
+	Re-registers with the spatial hash under the new faction if already in-tree so a
+	future enemy emplacement is targeted correctly by opposing units."""
+	if new_faction == owner_faction:
+		return
+	owner_faction = new_faction
+	if is_inside_tree() and _spatial_hash:
+		if _spatial_hash.has_method("unregister_unit"):
+			_spatial_hash.unregister_unit(self)
+		_register_with_spatial_hash()
 
 
 func get_weapon_range() -> float:

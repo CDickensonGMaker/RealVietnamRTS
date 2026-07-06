@@ -829,8 +829,8 @@ func _on_building_destroyed(damage_type: String) -> void:
 			defense.set_active(false)
 
 		var garrison: Node = completed_building.get_node_or_null("GarrisonableStructure")
-		if garrison and garrison.has_method("eject_all"):
-			garrison.eject_all()
+		if garrison and garrison.has_method("exit_all"):
+			garrison.exit_all()
 
 
 func heal(amount: float) -> void:

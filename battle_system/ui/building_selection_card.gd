@@ -190,7 +190,7 @@ func _build_ui() -> void:
 
 	# Garrison info
 	_garrison_label = Label.new()
-	_garrison_label.text = "Garrison: 0/8"
+	_garrison_label.text = "GARRISON 0/8"
 	_garrison_label.add_theme_font_size_override("font_size", 10)
 	_garrison_label.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_SECONDARY)
 	_stats_container.add_child(_garrison_label)
@@ -323,10 +323,10 @@ func _update_from_construction_zone(zone: ConstructionZone) -> void:
 	if garrison:
 		var current: int = garrison.garrisoned_units.size() if garrison.has_method("get") else 0
 		var max_garrison: int = garrison.max_infantry if garrison.has_method("get") else 0
-		_garrison_label.text = "Garrison: %d/%d" % [current, max_garrison]
+		_garrison_label.text = "GARRISON %d/%d" % [current, max_garrison]
 		_garrison_label.visible = true
 	elif data and data.garrison_capacity > 0:
-		_garrison_label.text = "Garrison: 0/%d" % data.garrison_capacity
+		_garrison_label.text = "GARRISON 0/%d" % data.garrison_capacity
 		_garrison_label.visible = true
 	else:
 		_garrison_label.visible = false
@@ -378,7 +378,7 @@ func _update_from_building(building: Node3D) -> void:
 	if garrison:
 		var current: int = garrison.garrisoned_units.size()
 		var max_garrison: int = garrison.max_infantry
-		_garrison_label.text = "Garrison: %d/%d" % [current, max_garrison]
+		_garrison_label.text = "GARRISON %d/%d" % [current, max_garrison]
 		_garrison_label.visible = true
 	else:
 		_garrison_label.visible = false

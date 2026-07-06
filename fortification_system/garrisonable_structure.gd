@@ -126,15 +126,17 @@ func enter(unit: Node3D) -> bool:
 
 	garrisoned_units.append(unit)
 
-	# Hide unit visual (they're inside the building)
-	unit.visible = false
-
-	# Mark unit as garrisoned
-	if unit.has_method("set_garrisoned"):
+	# Suspend the unit's AI, hide visuals, disable selection/collision.
+	# enter_garrison is Squad's real implementation; fall back to legacy setters.
+	if unit.has_method("enter_garrison"):
+		unit.enter_garrison(self)
+	elif unit.has_method("set_garrisoned"):
 		unit.set_garrisoned(true, self)
-	elif unit.has_method("set"):
-		unit.set("is_garrisoned", true)
-		unit.set("garrison_structure", self)
+	else:
+		unit.visible = false
+		if unit.has_method("set"):
+			unit.set("is_garrisoned", true)
+			unit.set("garrison_structure", self)
 
 	# Apply suppression immunity
 	if suppression_immunity and unit.has_method("set"):
@@ -162,16 +164,19 @@ func exit(unit: Node3D, exit_position: Vector3 = Vector3.INF) -> bool:
 		var angle: float = randf() * TAU
 		exit_position = parent_pos + Vector3(cos(angle) * 3.0, 0, sin(angle) * 3.0)
 
-	# Restore unit visibility
-	unit.visible = true
+	# Place the unit at the exit point, then restore its state.
+	# Position must be set BEFORE exit_garrison so the terrain re-snap uses it.
 	unit.global_position = exit_position
-
-	# Clear garrisoned state
-	if unit.has_method("set_garrisoned"):
+	if unit.has_method("exit_garrison"):
+		unit.exit_garrison()
+	elif unit.has_method("set_garrisoned"):
+		unit.visible = true
 		unit.set_garrisoned(false, null)
-	elif unit.has_method("set"):
-		unit.set("is_garrisoned", false)
-		unit.set("garrison_structure", null)
+	else:
+		unit.visible = true
+		if unit.has_method("set"):
+			unit.set("is_garrisoned", false)
+			unit.set("garrison_structure", null)
 
 	# Remove suppression immunity
 	if unit.has_method("set"):

@@ -53,6 +53,7 @@ signal resupply_started  ## Emitted when unit begins seeking SupplyDepot
 signal resupply_completed  ## Emitted when unit finishes resupply at depot
 signal seeking_cover(cover_pos: Vector3)  ## Emitted when unit starts moving to cover
 signal reached_cover(cover_type: int)  ## Emitted when unit arrives at cover position
+signal reached_destination(squad: Node3D)  ## Emitted when a move order completes (arrival)
 
 enum State { IDLE, MOVING, COMBAT, SUPPRESSED, DEAD, CLEARING, ROUTING, RESUPPLYING }
 
@@ -90,6 +91,11 @@ var _morale_indicator: Label3D = null  # "BROKEN" / "RALLYING" floating text
 var is_in_cover: bool = false
 var is_prone: bool = false
 var _current_cover_type: int = 0  # GameEnums.CoverType
+
+## Garrison state (set by GarrisonableStructure.enter/exit via enter_garrison/exit_garrison)
+var is_garrisoned: bool = false
+var garrison_structure: Node3D = null
+var _pre_garrison_collision_layer: int = 0
 
 # Cover-seeking behavior (Phase 4.2 - seek cover when under fire)
 var _seeking_cover: bool = false
@@ -466,6 +472,8 @@ func _process_movement(delta: float) -> void:
 			return
 
 		state = State.IDLE
+		# Notify listeners (e.g. pending garrison orders) that we arrived
+		reached_destination.emit(self)
 		return
 
 	# Calculate base movement toward target
@@ -999,6 +1007,74 @@ func stop_attack() -> void:
 		_pop_state()
 	# Also stop suppressive fire if active
 	_cancel_suppressive_fire()
+
+
+# =============================================================================
+# GARRISON STATE
+# =============================================================================
+
+## Enter a garrisonable structure: hide visuals, disable selection/collision, and
+## suspend AI/movement. Called by GarrisonableStructure.enter(). The structure owns
+## the squad's position while garrisoned; its weapons fire via the sibling
+## DefensiveStructure (requires_garrison_to_fire), so the squad itself goes dormant.
+func enter_garrison(structure: Node3D) -> void:
+	if is_garrisoned:
+		return
+	is_garrisoned = true
+	garrison_structure = structure
+
+	# Drop any active orders so nothing resumes on exit
+	current_target = null
+	has_move_order = false
+	is_clearing = false
+	velocity = Vector3.ZERO
+	cancel_cover_seeking()
+	state = State.IDLE
+
+	# Hide visuals + deselect (unit is inside the structure)
+	visible = false
+	set_selected_visual(false)
+
+	# Disable click/box selection and physics collision (raycasts must miss)
+	_pre_garrison_collision_layer = collision_layer
+	collision_layer = 0
+	if is_instance_valid(_collision_shape):
+		_collision_shape.disabled = true
+
+	# Remove from spatial hash so enemies target the structure, not the ghost inside
+	if _spatial_grid and _spatial_grid.has_method("unregister_unit"):
+		_spatial_grid.unregister_unit(self)
+
+	# Suspend AI/movement processing while garrisoned
+	set_physics_process(false)
+
+
+## Exit garrison: restore visuals, collision, spatial registration, and processing.
+## Position is set by the structure before this call. Called by
+## GarrisonableStructure.exit().
+func exit_garrison() -> void:
+	if not is_garrisoned:
+		return
+	is_garrisoned = false
+	garrison_structure = null
+
+	# Restore visuals
+	visible = true
+
+	# Restore selection/collision
+	collision_layer = _pre_garrison_collision_layer if _pre_garrison_collision_layer != 0 else collision_layer
+	if is_instance_valid(_collision_shape):
+		_collision_shape.disabled = false
+
+	# Re-register with spatial hash at the exit position
+	if _spatial_grid and _spatial_grid.has_method("register_unit"):
+		var faction_val: int = data.faction if data else GameEnums.Faction.US_ARMY
+		_spatial_grid.register_unit(self, faction_val)
+
+	# Resume AI/movement processing
+	set_physics_process(true)
+	state = State.IDLE
+	_last_snap_xz = Vector2(INF, INF)  # Force a terrain re-snap at the new position
 
 
 # =============================================================================

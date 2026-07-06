@@ -170,10 +170,13 @@ func fire_weapon(attacker: Node, target: Node, weapon_id: String) -> bool:
 	if not consume_ammo(attacker, weapon_id):
 		return false
 
-	# Get attacker faction
+	# Get attacker faction. Squads carry it on data.faction; emplacements
+	# (DefensiveStructure) expose get_faction() so enemy structures fire correctly.
 	var attacker_faction: int = 0
 	if attacker.has_method("get") and attacker.get("data"):
 		attacker_faction = attacker.data.faction
+	elif attacker.has_method("get_faction"):
+		attacker_faction = attacker.get_faction()
 
 	# Calculate target position with prediction
 	var target_pos: Vector3 = _predict_target_position(attacker, target, weapon)

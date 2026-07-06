@@ -75,11 +75,14 @@ static func _attach_defense(building: Node3D, data: BuildingData) -> void:
 		structure_type = DefensiveStructureScript.StructureType.MORTAR_PIT
 	defense.structure_type = structure_type
 
-	# Owner faction (BuildingData carries no faction field today; keeper defaults
-	# to US_ARMY=0, correct for player-built firebase defenses)
-	var faction: Variant = data.get("faction")
-	if faction != null:
-		defense.owner_faction = int(faction)
+	# Owner faction: player-built firebase defenses are US_ARMY (GameEnums.Faction.US_ARMY=0).
+	# Set it EXPLICITLY (not by relying on the component default). Read an override from the
+	# owning building if one is present, so a future enemy emplacement wires up correctly.
+	# BuildingData intentionally carries no faction field (out of scope).
+	var faction: int = 0  # GameEnums.Faction.US_ARMY
+	if building.has_method("get") and building.get("faction") != null:
+		faction = int(building.get("faction"))
+	defense.set_faction(faction)
 
 	defense.building_data = data
 	building.add_child(defense)
