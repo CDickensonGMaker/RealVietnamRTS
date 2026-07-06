@@ -12,6 +12,7 @@ const BuildMenuPopupScript = preload("res://battle_system/ui/build_menu_popup.gd
 const PlacementControllerScript = preload("res://firebase_system/placement_controller.gd")
 const BattleLogPanelScript = preload("res://battle_system/ui/battle_log_panel.gd")
 const ResourceStripScript = preload("res://battle_system/ui/resource_strip.gd")
+const FirebasePanelScript = preload("res://battle_system/ui/firebase_panel.gd")
 
 # =============================================================================
 # STATE
@@ -27,6 +28,7 @@ var _tactical_minimap: SubViewportContainer
 var _job_queue_label: Label
 var _battle_log: PanelContainer
 var _resource_strip: PanelContainer
+var _firebase_panel: PanelContainer
 var _build_menu_popup: Control
 
 var _cursor_mode: int = CursorModeScript.Mode.NORMAL
@@ -311,6 +313,18 @@ func _build_hud() -> void:
 	_resource_strip.offset_right = 140
 	_resource_strip.offset_bottom = 44
 	base.add_child(_resource_strip)
+
+	# Firebase panel (right side, below minimap + job queue label)
+	_firebase_panel = FirebasePanelScript.new()
+	_firebase_panel.anchor_left = 1.0
+	_firebase_panel.anchor_right = 1.0
+	_firebase_panel.anchor_top = 0.0
+	_firebase_panel.anchor_bottom = 0.0
+	_firebase_panel.offset_left = -210
+	_firebase_panel.offset_top = 260
+	_firebase_panel.offset_right = -10
+	_firebase_panel.offset_bottom = 500
+	base.add_child(_firebase_panel)
 
 	# Battle log (bottom, between selection card and command panel)
 	_battle_log = BattleLogPanelScript.new()
@@ -1167,6 +1181,11 @@ func get_command_panel() -> Control:
 ## Get the tactical minimap
 func get_tactical_minimap() -> SubViewportContainer:
 	return _tactical_minimap
+
+
+## Get the firebase panel
+func get_firebase_panel() -> PanelContainer:
+	return _firebase_panel
 
 
 ## Configure the minimap with map bounds
