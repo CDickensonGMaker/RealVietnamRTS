@@ -4,6 +4,7 @@ class_name MissionHUD
 ## Positioned at top-right of screen, shows primary/secondary objectives
 
 const MissionObjective = preload("res://campaign/mission_objective.gd")
+const MilitaryTheme = preload("res://battle_system/ui/military_theme.gd")
 
 ## UI Components
 var _container: VBoxContainer
@@ -33,18 +34,18 @@ func _process(_delta: float) -> void:
 
 
 func _create_ui() -> void:
-	# Main container - top right
+	# Main container - top left (per ui-vision.md concept; top-right belongs
+	# to minimap + firebase panel)
 	_container = VBoxContainer.new()
 	_container.name = "MissionContainer"
 	add_child(_container)
 
-	# Position at top-right
-	anchor_left = 1.0
-	anchor_right = 1.0
+	anchor_left = 0.0
+	anchor_right = 0.0
 	anchor_top = 0.0
 	anchor_bottom = 0.0
-	offset_left = -320
-	offset_right = -10
+	offset_left = 10
+	offset_right = 320
 	offset_top = 10
 	offset_bottom = 300
 
@@ -52,15 +53,7 @@ func _create_ui() -> void:
 	var panel := PanelContainer.new()
 	panel.name = "Background"
 	_container.add_child(panel)
-
-	# Add style
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.1, 0.1, 0.1, 0.85)
-	style.border_color = Color(0.3, 0.3, 0.3)
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(4)
-	style.set_content_margin_all(10)
-	panel.add_theme_stylebox_override("panel", style)
+	panel.add_theme_stylebox_override("panel", MilitaryTheme.create_panel_stylebox())
 
 	# Inner container
 	var inner := VBoxContainer.new()
@@ -72,7 +65,7 @@ func _create_ui() -> void:
 	_mission_label.name = "MissionName"
 	_mission_label.text = "MISSION"
 	_mission_label.add_theme_font_size_override("font_size", 18)
-	_mission_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.5))
+	_mission_label.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_HIGHLIGHT)
 	inner.add_child(_mission_label)
 
 	# Time label
@@ -80,7 +73,7 @@ func _create_ui() -> void:
 	_time_label.name = "TimeRemaining"
 	_time_label.text = ""
 	_time_label.add_theme_font_size_override("font_size", 14)
-	_time_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	_time_label.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_PRIMARY)
 	inner.add_child(_time_label)
 
 	# Separator
@@ -91,7 +84,7 @@ func _create_ui() -> void:
 	var obj_header := Label.new()
 	obj_header.text = "OBJECTIVES"
 	obj_header.add_theme_font_size_override("font_size", 14)
-	obj_header.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	obj_header.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_SECONDARY)
 	inner.add_child(obj_header)
 
 	# Objectives container
