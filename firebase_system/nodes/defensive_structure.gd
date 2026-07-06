@@ -46,6 +46,17 @@ enum StructureType { MG_NEST, BUNKER, MORTAR_PIT, WATCHTOWER, GUARD_TOWER }
 ## Whether structure can rotate after placement (true for artillery)
 var can_rotate_post_placement: bool = false
 
+## Whether to build the component's own procedural mesh. Set false when attached
+## to a building that already carries a GLB/placeholder model.
+var create_own_visuals: bool = true
+
+## Whether this emplacement needs a manned sibling GarrisonableStructure to fire
+## (crew-served weapons: bunker rifles, mortar, artillery)
+var requires_garrison: bool = false
+
+## Whether this defense is enabled (disabled on building destruction)
+var is_active: bool = true
+
 ## BuildingData reference (optional, set by construction system)
 var building_data: RefCounted = null
 
@@ -112,6 +123,9 @@ var _scan_timer: float = 0.0
 var _spatial_hash: Node = null
 var _combat_manager: Node = null
 
+## Sibling garrison component (crew) - only cached when requires_garrison is true
+var _garrison_component: Node = null
+
 # =============================================================================
 # VISUAL COMPONENTS
 # =============================================================================
@@ -177,8 +191,16 @@ func _ready() -> void:
 	add_to_group("all_units")
 	add_to_group("buildings")
 
-	# Create visual representation
-	_setup_visuals()
+	# Create visual representation (skipped when attached to a building that
+	# already carries its own model)
+	if create_own_visuals:
+		_setup_visuals()
+
+	# Cache the sibling garrison for crew-served weapons
+	if requires_garrison:
+		var parent: Node = get_parent()
+		if parent:
+			_garrison_component = parent.get_node_or_null("GarrisonableStructure")
 
 	# Register with spatial hash
 	_register_with_spatial_hash()
@@ -192,7 +214,16 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	if not is_active:
+		return
+
 	if not is_manned or not can_fire:
+		return
+
+	# Crew-served weapons need a manned garrison sibling before they fire
+	if requires_garrison and not _has_garrison():
+		if _current_target:
+			_lose_target()
 		return
 
 	# Update timers
@@ -814,7 +845,23 @@ func get_current_target() -> Node3D:
 
 func is_operational() -> bool:
 	"""Check if structure can engage enemies."""
-	return is_manned and can_fire and current_ammo > 0 and health > 0
+	if requires_garrison and not _has_garrison():
+		return false
+	return is_active and is_manned and can_fire and current_ammo > 0 and health > 0
+
+
+func _has_garrison() -> bool:
+	"""True when a sibling GarrisonableStructure holds at least one soldier."""
+	if not is_instance_valid(_garrison_component):
+		return false
+	return not _garrison_component.garrisoned_units.is_empty()
+
+
+func set_active(active: bool) -> void:
+	"""Enable/disable the emplacement (called on building destruction)."""
+	is_active = active
+	if not active:
+		_lose_target()
 
 
 func get_status() -> Dictionary:

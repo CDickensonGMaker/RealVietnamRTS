@@ -19,6 +19,10 @@ var building_data: BuildingData = null
 var owning_firebase: Firebase = null
 var _is_destroyed: bool = false
 
+## Health (initialized from BuildingData in _ready)
+var max_health: float = 100.0
+var current_health: float = 100.0
+
 ## Visual
 @onready var _model: Node3D = $Model if has_node("Model") else null
 
@@ -29,6 +33,10 @@ func _ready() -> void:
 	if not building_data:
 		push_error("[PlacedBuilding] Invalid building type: %d" % building_type)
 		return
+
+	# Initialize health from building data
+	max_health = building_data.health if building_data.health > 0.0 else 100.0
+	current_health = max_health
 
 	# Add to groups
 	add_to_group("buildings")
@@ -181,9 +189,32 @@ func get_building_data() -> BuildingData:
 
 
 func take_damage(amount: float, source: Node3D = null) -> void:
-	"""Apply damage to building"""
-	# TODO: Implement damage states
-	pass
+	"""Apply damage to building; destroy at zero health."""
+	if _is_destroyed:
+		return
+	if amount <= 0.0:
+		return
+
+	current_health = maxf(current_health - amount, 0.0)
+
+	# Damage feedback for HUD / audio consumers
+	if BattleSignals and BattleSignals.has_signal("unit_damaged"):
+		BattleSignals.unit_damaged.emit(self, amount, source)
+
+	if current_health <= 0.0:
+		# Disable combat components and evict any garrison before removal
+		var defense: Node = get_node_or_null("DefensiveStructure")
+		if defense and defense.has_method("set_active"):
+			defense.set_active(false)
+		var garrison: Node = get_node_or_null("GarrisonableStructure")
+		if garrison and garrison.has_method("exit_all"):
+			garrison.exit_all()
+
+		# Notify systems that a placed building was destroyed
+		if BattleSignals and BattleSignals.has_signal("building_destroyed"):
+			BattleSignals.building_destroyed.emit(self, int(building_type))
+
+		destroy()
 
 
 func destroy() -> void:

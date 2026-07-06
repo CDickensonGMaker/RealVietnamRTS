@@ -334,11 +334,12 @@ func _update_from_construction_zone(zone: ConstructionZone) -> void:
 	# Defense info
 	var defense: Node = zone.completed_building.get_node_or_null("DefensiveStructure") if zone.completed_building else null
 	if defense:
-		var weapon: String = defense.weapon_type if defense.has_method("get") else "unknown"
-		var range_m: float = defense.attack_range if defense.has_method("get") else 0.0
+		var weapon: String = defense.weapon_id
+		var range_m: float = defense.get_weapon_range()
 		var target_name: String = "None"
-		if defense.current_target and is_instance_valid(defense.current_target):
-			target_name = defense.current_target.name
+		var current_target: Node3D = defense.get_current_target()
+		if current_target and is_instance_valid(current_target):
+			target_name = current_target.name
 
 		if defense.is_active:
 			_defense_label.text = "Defense: %s (%.0fm) - Target: %s" % [weapon.to_upper(), range_m, target_name]
@@ -385,8 +386,8 @@ func _update_from_building(building: Node3D) -> void:
 	# Check for defense component
 	var defense: Node = building.get_node_or_null("DefensiveStructure")
 	if defense:
-		var weapon: String = defense.weapon_type
-		var range_m: float = defense.attack_range
+		var weapon: String = defense.weapon_id
+		var range_m: float = defense.get_weapon_range()
 		_defense_label.text = "Defense: %s (%.0fm)" % [weapon.to_upper(), range_m]
 		_defense_label.visible = true
 	else:

@@ -22,6 +22,7 @@ const Firebase = preload("res://firebase_system/firebase.gd")
 const ConstructionZone = preload("res://firebase_system/construction_zone.gd")
 const BuildingData = preload("res://firebase_system/building_data.gd")
 const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
+const BuildingComponentFactory = preload("res://firebase_system/building_component_factory.gd")
 
 ## Debug print control - keep false to silence per-event construction prints (job
 ## register/complete, spawns, firebase activation). One-time init, errors and warnings
@@ -492,6 +493,11 @@ func spawn_building_at(world_position: Vector3, building_type: int, rotation_y: 
 	# Store building type as metadata
 	building.set_meta("building_type", building_type)
 	building.set_meta("building_data", data)
+
+	# Attach garrison / auto-defense components so the finished building is a real
+	# combat object (Pillar 2 & 5). Shared with the ConstructionZone legacy path.
+	if data:
+		BuildingComponentFactory.attach_building_components(building, data)
 
 	# Initialize defensive structures with fire arc data from BuildingData
 	if building.has_method("initialize_from_building_data") and data:

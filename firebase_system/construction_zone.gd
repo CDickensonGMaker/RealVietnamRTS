@@ -16,6 +16,7 @@ enum ZoneState { EMPTY, CLEARING, BUILDING, COMPLETE }
 enum ConstructionStage { NONE, FOUNDATION, STRUCTURE, FINISHING, COMPLETE }
 
 const BuildingData = preload("res://firebase_system/building_data.gd")
+const BuildingComponentFactory = preload("res://firebase_system/building_component_factory.gd")
 
 ## Building model paths - organized by category
 ## Models are loaded from res://assets/models/structures/ with subdirectories per category
@@ -475,32 +476,10 @@ func _create_building() -> Node3D:
 	add_child(building)
 	building.position = Vector3.ZERO
 
-	# Add garrison component if building has garrison capacity
-	if building_data.garrison_capacity > 0:
-		var garrison_script = load("res://fortification_system/garrisonable_structure.gd")
-		if garrison_script:
-			var garrison: Node = garrison_script.new()
-			garrison.name = "GarrisonableStructure"
-			garrison.max_infantry = building_data.garrison_capacity
-			# Set structure type based on building category
-			if building_data.category == BuildingData.BuildingCategory.FIREBASE_PERIMETER:
-				garrison.structure_type = 0  # BUNKER type
-			building.add_child(garrison)
-
-	# Add auto-defense component if building has auto_attacks
-	if building_data.auto_attacks and not building_data.defense_weapon.is_empty():
-		var defense_script = load("res://fortification_system/defensive_structure.gd")
-		if defense_script:
-			var defense: Node = defense_script.new()
-			defense.name = "DefensiveStructure"
-			defense.weapon_type = building_data.defense_weapon
-			defense.defense_type = building_data.defense_type
-			defense.attack_range = building_data.attack_range
-			defense.requires_garrison = building_data.requires_garrison_to_fire
-			building.add_child(defense)
-			print("[ConstructionZone] Added auto-defense to %s (weapon: %s, range: %.0fm)" % [
-				building_data.display_name, building_data.defense_weapon, building_data.attack_range
-			])
+	# Attach garrison / auto-defense components via the shared factory so this
+	# legacy path and ConstructionManager.spawn_building_at produce identical,
+	# functional buildings (Pillar 2 & 5).
+	BuildingComponentFactory.attach_building_components(building, building_data)
 
 	return building
 
