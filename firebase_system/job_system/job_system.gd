@@ -910,7 +910,7 @@ func can_worker_do_job(worker_class: String, job_type: UnifiedJobClass.Type) -> 
 		UnifiedJobClass.Type.BUILD_STRUCTURE:
 			return worker_class in ["engineer", "bulldozer"]  # Both can build structures
 		UnifiedJobClass.Type.BUILD_ROAD:
-			return worker_class == "bulldozer"  # Bulldozers build roads
+			return worker_class in ["bulldozer", "engineer"]  # Both can build roads (engineers = paths)
 		UnifiedJobClass.Type.FILL_CRATER:
 			return worker_class in ["engineer", "bulldozer"]  # Both can fill
 		UnifiedJobClass.Type.DIG_TRENCH:
@@ -1177,6 +1177,27 @@ func _on_wire_complete(job: UnifiedJobClass) -> void:
 func _on_road_complete(job: UnifiedJobClass) -> void:
 	"""Handle road segment completion"""
 	if is_instance_valid(job) and job.state != UnifiedJobClass.State.COMPLETE:
+		# Determine road quality based on worker type that built it
+		# Bulldozer = 1.0 (full speed), Engineer = 0.75 (path speed)
+		var quality: float = 0.75  # Default to engineer path quality
+		var width: float = 2.0  # Default to engineer path width
+
+		for worker in job.assigned_workers:
+			if is_instance_valid(worker):
+				var worker_class: String = get_worker_class(worker)
+				if worker_class == "bulldozer":
+					quality = 1.0
+					width = 4.0
+					break  # Bulldozer quality trumps engineer
+
+		# Update road node with quality
+		var road_node: Node = job.metadata.get("job_node")
+		if is_instance_valid(road_node):
+			road_node.road_quality = quality
+			road_node.road_width = width
+
+		job.metadata["road_quality"] = quality
+		job.metadata["road_width"] = width
 		job.set_state(UnifiedJobClass.State.COMPLETE)
 
 

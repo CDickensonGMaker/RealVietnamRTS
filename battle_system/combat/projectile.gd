@@ -194,8 +194,8 @@ func _process_flat_trajectory(delta: float) -> void:
 	velocity.y -= gravity * 0.1 * delta  # Minimal drop for bullets
 	global_position += velocity * delta
 
-	# Face velocity direction
-	if velocity.length_squared() > 0.01:
+	# Face velocity direction (must be in tree for look_at)
+	if velocity.length_squared() > 0.01 and is_inside_tree():
 		look_at(global_position + velocity, Vector3.UP)
 
 
@@ -210,7 +210,7 @@ func _process_arcing_trajectory(delta: float) -> void:
 	velocity.y -= gravity * delta
 	global_position += velocity * delta
 
-	if velocity.length_squared() > 0.01:
+	if velocity.length_squared() > 0.01 and is_inside_tree():
 		look_at(global_position + velocity, Vector3.UP)
 
 
@@ -257,7 +257,7 @@ func _process_rocket_physics(delta: float) -> void:
 	global_position += velocity * delta
 
 	# Rockets point along velocity
-	if velocity.length_squared() > 0.01:
+	if velocity.length_squared() > 0.01 and is_inside_tree():
 		var look_dir: Vector3 = velocity.normalized()
 		var up: Vector3 = Vector3.UP
 		if abs(look_dir.dot(Vector3.UP)) > 0.99:
@@ -285,7 +285,7 @@ func _process_high_arc_trajectory(_delta: float) -> void:
 		look_target.y = 0.0
 		var current_flat: Vector3 = global_position
 		current_flat.y = 0.0
-		if current_flat.distance_to(look_target) > 0.1:
+		if current_flat.distance_to(look_target) > 0.1 and is_inside_tree():
 			var dir: Vector3 = (look_target - current_flat).normalized()
 			dir.y = -1.0 * (progress - 0.5) * 2.0
 			look_at(global_position + dir, Vector3.UP)
@@ -314,7 +314,7 @@ func _process_diving_trajectory(delta: float) -> void:
 		rotation.x += delta * _tumble_rate
 		rotation.z += delta * _tumble_rate * 0.7
 
-	if velocity.length_squared() > 0.01:
+	if velocity.length_squared() > 0.01 and is_inside_tree():
 		var look_dir: Vector3 = velocity.normalized()
 		var up: Vector3 = Vector3.UP
 		if abs(look_dir.dot(Vector3.UP)) > 0.99:
@@ -684,8 +684,8 @@ func fire(config: Dictionary) -> void:
 	is_tracer = config.get("is_tracer", false)
 	_update_visuals()
 
-	# Point toward target
-	if direction.length_squared() > 0.01:
+	# Point toward target (must be in tree for look_at)
+	if direction.length_squared() > 0.01 and is_inside_tree():
 		look_at(global_position + direction, Vector3.UP)
 
 	# Start processing

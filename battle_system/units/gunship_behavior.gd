@@ -168,20 +168,16 @@ func _process_patrol(delta: float) -> void:
 
 
 func _find_nearest_enemy() -> Node3D:
-	var enemies := helicopter.get_tree().get_nodes_in_group("enemy_units")
-	var nearest: Node3D = null
-	var nearest_dist: float = detection_range
-	for e in enemies:
-		if not is_instance_valid(e):
-			continue
-		var n: Node3D = e as Node3D
-		if not n:
-			continue
-		var d: float = helicopter.global_position.distance_to(n.global_position)
-		if d < nearest_dist:
-			nearest_dist = d
-			nearest = n
-	return nearest
+	if not is_instance_valid(helicopter):
+		return null
+
+	# Gunship is US faction - use SpatialHashGrid to find VC/NVA
+	if SpatialHashGrid:
+		return SpatialHashGrid.get_nearest_enemy(
+			helicopter.global_position, GameEnums.Faction.US_ARMY, detection_range
+		)
+
+	return null
 
 
 # =============================================================================

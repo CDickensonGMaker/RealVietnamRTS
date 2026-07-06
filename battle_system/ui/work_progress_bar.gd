@@ -36,7 +36,7 @@ func _process(_delta: float) -> void:
 
 	# Billboard - face camera (handle top-down camera properly)
 	var camera: Camera3D = get_viewport().get_camera_3d()
-	if camera:
+	if camera and is_inside_tree():
 		var to_camera: Vector3 = camera.global_position - global_position
 		# Only billboard horizontally if camera isn't directly above
 		if absf(to_camera.x) > 0.1 or absf(to_camera.z) > 0.1:

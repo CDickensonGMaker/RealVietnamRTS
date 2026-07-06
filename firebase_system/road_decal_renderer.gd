@@ -10,8 +10,9 @@ const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
 
 ## Road configuration
 const DEFAULT_ROAD_WIDTH := 3.0
-const HEIGHT_OFFSET := 0.05  # Slightly above terrain to avoid z-fighting
+const HEIGHT_OFFSET := 0.08  # Slightly above terrain to avoid z-fighting
 const UV_SCALE := 0.25  # UV tiling along road length
+const ROAD_TEXTURE_PATH := "res://assets/textures/terrain/dirt_road.png"
 
 ## Road colors
 const DIRT_COLOR := Color(0.35, 0.32, 0.28)  # Brown dirt
@@ -42,11 +43,18 @@ func _ready() -> void:
 
 func _setup_material() -> void:
 	_road_material = StandardMaterial3D.new()
-	_road_material.albedo_color = DIRT_COLOR
 	_road_material.roughness = 0.9
 	_road_material.metallic = 0.0
 	_road_material.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
 	_road_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	if ResourceLoader.exists(ROAD_TEXTURE_PATH):
+		_road_material.albedo_texture = load(ROAD_TEXTURE_PATH)
+		_road_material.albedo_color = Color.WHITE  # No tinting when textured
+	else:
+		push_warning("Dirt road texture missing: " + ROAD_TEXTURE_PATH)
+		_road_material.albedo_color = DIRT_COLOR  # Fallback
+
 	material_override = _road_material
 
 

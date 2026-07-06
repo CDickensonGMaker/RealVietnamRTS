@@ -1,4 +1,4 @@
-class_name DefensiveStructure extends Node3D
+class_name FortificationDefensiveStructure extends Node3D
 ## DefensiveStructure - Auto-targeting defense component for bunkers, MG nests, mortar pits
 ##
 ## Attach to any building to enable automatic enemy engagement.
@@ -140,25 +140,15 @@ func _scan_for_enemies() -> void:
 	"""Scan for enemies within detection range"""
 	detected_enemies.clear()
 
-	# Get enemies from spatial hash grid
-	var grid: Node = get_node_or_null("/root/SpatialHashGrid")
-	if grid and grid.has_method("get_enemies_in_radius"):
-		# Assume we're US/ARVN faction (buildings are player-owned)
-		var enemies: Array = grid.get_enemies_in_radius(global_position, detection_range, GameEnums.Faction.US_ARMY)
+	# Use SpatialHashGrid for efficient enemy lookup
+	# Defensive structures are player-owned (US/ARVN faction)
+	if SpatialHashGrid:
+		var enemies: Array = SpatialHashGrid.get_enemies_in_radius(
+			global_position, GameEnums.Faction.US_ARMY, detection_range
+		)
 		for enemy in enemies:
 			if is_instance_valid(enemy) and enemy is Node3D:
 				detected_enemies.append(enemy)
-	else:
-		# Fallback: scan enemy groups directly
-		var enemy_groups: Array[String] = ["enemy_units"]
-		for group_name in enemy_groups:
-			var enemies: Array[Node] = get_tree().get_nodes_in_group(group_name)
-			for enemy in enemies:
-				if not is_instance_valid(enemy) or not enemy is Node3D:
-					continue
-				var dist: float = global_position.distance_to(enemy.global_position)
-				if dist <= detection_range:
-					detected_enemies.append(enemy)
 
 
 func _process_targeting(delta: float) -> void:

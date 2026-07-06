@@ -68,8 +68,9 @@ class RoadSegment:
 	var connected_segments: Array[int] = []
 	var is_bridge: bool = false  # True if this segment spans water/ravine
 	var spline: RefCounted = null  # Optional TerrainSpline for smooth curves
+	var quality: float = 1.0  # Road quality (1.0 = bulldozer road, 0.75 = engineer path)
 
-	func _init(seg_id: int, p_start: Vector3, p_end: Vector3, p_type: int = RoadType.DIRT_TRAIL, p_is_bridge: bool = false) -> void:
+	func _init(seg_id: int, p_start: Vector3, p_end: Vector3, p_type: int = RoadType.DIRT_TRAIL, p_is_bridge: bool = false, p_quality: float = 1.0) -> void:
 		id = seg_id
 		start = p_start
 		end = p_end
@@ -78,6 +79,7 @@ class RoadSegment:
 		repair_progress = 0.0
 		length = start.distance_to(end)
 		is_bridge = p_is_bridge
+		quality = p_quality
 
 	## Get actual length (uses spline if available)
 	func get_length() -> float:
@@ -127,12 +129,13 @@ class RoadSegment:
 		return distance <= tolerance
 
 	## Get speed multiplier for this segment
+	## Factors in: road state, road type, and road quality (engineer path vs bulldozer road)
 	func get_speed_multiplier() -> float:
 		var state_mult: float = STATE_SPEED_MULT.get(state, 1.0)
 		if state == RoadState.INTACT:
 			var type_mult: float = TYPE_SPEED_MULT.get(road_type, 1.0)
-			return state_mult * type_mult
-		return state_mult
+			return state_mult * type_mult * quality
+		return state_mult * quality
 
 
 ## Road waypoint node (intersection or endpoint)

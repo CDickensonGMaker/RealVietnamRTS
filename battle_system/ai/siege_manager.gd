@@ -323,13 +323,15 @@ func _launch_human_wave(siege: SiegeOperation) -> void:
 			unit.move_to(target_pos)
 			attacking_count += 1
 
-		# Attack any enemies encountered
-		var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
-		for player_unit in player_units:
+		# Attack any enemies encountered - use SpatialHashGrid for efficiency
+		# NVA siege units are NVA faction, looking for US/ARVN enemies
+		var player_units: Array[Node3D] = SpatialHashGrid.get_enemies_in_radius(
+			unit.global_position, GameEnums.Faction.NVA, 30.0
+		)
+		for player_unit: Node3D in player_units:
 			if not is_instance_valid(player_unit):
 				continue
-			var dist: float = unit.global_position.distance_to(player_unit.global_position)
-			if dist < 30.0 and unit.has_method("attack"):
+			if unit.has_method("attack"):
 				unit.attack(player_unit)
 				break
 

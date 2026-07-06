@@ -46,9 +46,9 @@ func _process(delta: float) -> void:
 	# Update position to follow unit
 	global_position = _target_unit.global_position + Vector3(0, bar_offset, 0)
 
-	# Billboard - face camera
+	# Billboard - face camera (must be in tree for look_at)
 	var camera: Camera3D = get_viewport().get_camera_3d()
-	if camera:
+	if camera and is_inside_tree():
 		look_at(camera.global_position, Vector3.UP)
 
 	# Handle visibility timer

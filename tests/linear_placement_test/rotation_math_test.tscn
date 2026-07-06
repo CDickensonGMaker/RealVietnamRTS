@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://c7m2jkqvt4nwu"]
+
+[ext_resource type="Script" path="res://tests/linear_placement_test/rotation_math_test.gd" id="1_test"]
+
+[node name="RotationMathTest" type="Node"]
+script = ExtResource("1_test")

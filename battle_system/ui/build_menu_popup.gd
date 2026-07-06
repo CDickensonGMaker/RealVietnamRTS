@@ -9,6 +9,7 @@ class_name BuildMenuPopup
 const BuildingData = preload("res://firebase_system/building_data.gd")
 
 signal building_selected(building_key: String, placement_mode: PlacementMode)
+signal road_placement_requested()  # Player wants to draw a supply road
 signal menu_closed()
 
 ## Placement modes for different building types
@@ -16,7 +17,8 @@ enum PlacementMode {
 	SINGLE,                  # One click, one building
 	PAINTABLE,               # Continuous drag placement (seamless)
 	PAINTABLE_SPACED,        # Continuous drag with spacing (e.g., tank traps)
-	PAINTABLE_LINE_JITTERED  # Drag line with jittered spacing (foxholes)
+	PAINTABLE_LINE_JITTERED, # Drag line with jittered spacing (foxholes)
+	ROAD,                    # Click-drag road drawing with cost per meter
 }
 
 ## Tab categories for organizing buildings
@@ -93,13 +95,11 @@ const TAB_BUILDINGS: Dictionary = {
 		BuildingData.BuildingType.HELIPAD,
 		BuildingData.BuildingType.TOC,
 		BuildingData.BuildingType.MEDICAL_STATION,
-		BuildingData.BuildingType.AMMO_BUNKER,
 		BuildingData.BuildingType.COMMO_BUNKER,
 		BuildingData.BuildingType.OBSERVATION_TOWER,
 	],
 	TabCategory.SUPPLY_CHAIN: [
 		BuildingData.BuildingType.SUPPLY_DEPOT,
-		BuildingData.BuildingType.FUEL_DEPOT,
 		BuildingData.BuildingType.PONTOON_BRIDGE,
 	],
 }
@@ -197,10 +197,6 @@ func _setup_buildings() -> void:
 	_add_building("helipad", "Helipad", 50, PlacementMode.SINGLE,
 		"", BuildingData.BuildingType.HELIPAD)
 
-	# Ammo Bunker - single placement
-	_add_building("ammo_bunker", "Ammo Bunker", 45, PlacementMode.SINGLE,
-		"", BuildingData.BuildingType.AMMO_BUNKER)
-
 	# Medical Station - single placement
 	_add_building("medical_station", "Medical Station", 35, PlacementMode.SINGLE,
 		"", BuildingData.BuildingType.MEDICAL_STATION)
@@ -233,11 +229,11 @@ func _setup_buildings() -> void:
 	_add_building("supply_depot", "Supply Depot", 60, PlacementMode.SINGLE,
 		"", BuildingData.BuildingType.SUPPLY_DEPOT)
 
-	_add_building("fuel_depot", "Fuel Depot", 40, PlacementMode.SINGLE,
-		"", BuildingData.BuildingType.FUEL_DEPOT)
-
 	_add_building("pontoon_bridge", "Pontoon Bridge", 80, PlacementMode.SINGLE,
 		"", BuildingData.BuildingType.PONTOON_BRIDGE)
+
+	# Road - special entry for drag-to-draw supply roads (0.5 supply per meter)
+	_add_road_entry()
 
 
 func _add_building(key: String, name: String, cost: int, mode: PlacementMode,
@@ -250,6 +246,22 @@ func _add_building(key: String, name: String, cost: int, mode: PlacementMode,
 	entry.scene_path = scene
 	entry.building_type = building_type
 	entry.spacing = spacing
+	BUILDINGS.append(entry)
+
+
+## Special road entry uses -2 as a marker (not a real BuildingType)
+const ROAD_BUILDING_TYPE := -2
+
+func _add_road_entry() -> void:
+	"""Add road to the build menu (special non-building entry)"""
+	var entry := BuildingEntry.new()
+	entry.key = "road"
+	entry.display_name = "Supply Road"
+	entry.supply_cost = 0  # Cost per meter, shown as "0.5/m"
+	entry.placement_mode = PlacementMode.ROAD
+	entry.scene_path = ""
+	entry.building_type = ROAD_BUILDING_TYPE
+	entry.category = "supply"
 	BUILDINGS.append(entry)
 
 
@@ -409,6 +421,9 @@ func _get_buildings_for_current_tab() -> Array[BuildingEntry]:
 	for entry: BuildingEntry in BUILDINGS:
 		if entry.building_type in tab_building_types:
 			result.append(entry)
+		# Special case: road appears in Supply Chain tab
+		elif entry.building_type == ROAD_BUILDING_TYPE and _current_tab == TabCategory.SUPPLY_CHAIN:
+			result.append(entry)
 
 	return result
 
@@ -474,7 +489,11 @@ func _create_thumbnail(entry: BuildingEntry) -> Control:
 
 	# Cost label
 	var cost_label := Label.new()
-	cost_label.text = "%d" % entry.supply_cost
+	# Road shows cost per meter instead of fixed cost
+	if entry.placement_mode == PlacementMode.ROAD:
+		cost_label.text = "0.5/m"
+	else:
+		cost_label.text = "%d" % entry.supply_cost
 	cost_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cost_label.add_theme_font_size_override("font_size", 12)
 	cost_label.add_theme_color_override("font_color", Color(0.94, 0.75, 0.25))  # Yellow
@@ -512,6 +531,7 @@ func _get_building_icon(key: String) -> String:
 		"supply_depot": return "[S]"
 		"fuel_depot": return "[F]"
 		"pontoon_bridge": return "=|="
+		"road": return "~~~"
 		_: return "[?]"
 
 
@@ -522,7 +542,10 @@ func _update_button_states() -> void:
 		var entry: BuildingEntry = container.get_meta("entry")
 		var cost_label: Label = container.get_meta("cost_label")
 
-		var can_afford: bool = current_supply >= entry.supply_cost
+		# Road is always available (cost is per meter, deducted during placement)
+		var can_afford: bool = true
+		if entry.placement_mode != PlacementMode.ROAD:
+			can_afford = current_supply >= entry.supply_cost
 
 		# Update visual state
 		container.modulate.a = 1.0 if can_afford else DISABLED_ALPHA
@@ -543,6 +566,13 @@ func _on_building_selected(key: String) -> void:
 			break
 
 	if not entry:
+		return
+
+	# Road is special - cost per meter, always enabled
+	if entry.placement_mode == PlacementMode.ROAD:
+		visible = false
+		road_placement_requested.emit()
+		print("[BuildMenu] Selected: Road (drag to draw, 0.5 supply/m)")
 		return
 
 	# Check affordability

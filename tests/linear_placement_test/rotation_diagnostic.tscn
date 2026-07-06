@@ -1,0 +1,52 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://tests/linear_placement_test/rotation_diagnostic.gd" id="1_diagnostic"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
+size = Vector2(30, 30)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ground"]
+albedo_color = Color(0.25, 0.3, 0.25, 1)
+
+[node name="RotationDiagnostic" type="Node3D"]
+script = ExtResource("1_diagnostic")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.342, 0.94, 0, -0.94, 0.342, 0, 20, 12)
+fov = 50.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.25, 0.433, 0, 0.866, 0.5, -0.5, -0.433, 0.75, 0, 15, 0)
+shadow_enabled = true
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_ground")
+surface_material_override/0 = SubResource("StandardMaterial3D_ground")
+
+[node name="InfoLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3, 0)
+pixel_size = 0.015
+text = "Building Name
+model_rotation_y = 0°"
+font_size = 32
+horizontal_alignment = 1
+
+[node name="CenterMarker" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 0)
+mesh = SubResource("PlaneMesh_ground")
+surface_material_override/0 = SubResource("StandardMaterial3D_ground")
+
+[node name="AxisX" type="MeshInstance3D" parent="."]
+
+[node name="AxisZ" type="MeshInstance3D" parent="."]
+
+[node name="Instructions" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, -12)
+pixel_size = 0.01
+text = "ROTATION DIAGNOSTIC
+Models should point OUTWARD like wheel spokes
+GREEN = Drag direction | BLUE = Footprint
+
+Keys: 1=Sandbag 2=Heavy 3=Wire 4=Concertina R=Rebuild Space=Animate"
+font_size = 28
+horizontal_alignment = 1

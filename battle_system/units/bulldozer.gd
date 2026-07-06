@@ -14,6 +14,7 @@ class_name Bulldozer extends CharacterBody3D
 
 const VehicleComponentScript = preload("res://battle_system/units/vehicle_component.gd")
 const SquadDataScript = preload("res://battle_system/data/squad_data.gd")
+const WorkerControllerScript = preload("res://firebase_system/job_system/worker_controller.gd")
 const BULLDOZER_MODEL_PATH: String = "res://assets/models/vehicles/us_bulldozer.glb"
 
 signal clearing_progress(zone_id: int, progress: float)
@@ -32,6 +33,7 @@ enum ClearingMode { NONE, CLEAR_ZONE, CLEAR_PATH, FLATTEN }
 @export var data: Resource  # SquadData
 @export var faction: int = 0  # GameEnums.Faction
 @export var use_placeholder_visual: bool = false  # Set true to use box placeholder
+@export var allow_direct_commands: bool = false  # Bypass WorkerController for test scenes
 
 ## Movement
 @export var max_speed: float = 6.0  # m/s (~22 km/h) - slow but steady
@@ -67,6 +69,15 @@ var has_move_order: bool = false
 ## Component system
 var vehicle_components: VehicleComponentScript = null
 
+## Worker controller for autonomous job finding
+var _worker_controller: WorkerControllerScript = null
+
+## Worker class identifier for WorkerController detection
+var worker_class: String = "bulldozer"
+
+## Track last abandoned job to prevent spam when manually controlling
+var _last_manual_abandon_job_id: int = -1
+
 ## Slope cache
 const SLOPE_QUERY_INTERVAL: float = 0.1
 var _slope_query_timer: float = 0.0
@@ -97,6 +108,7 @@ func _ready() -> void:
 		add_to_group("enemy_units")
 
 	_setup_components()
+	_setup_worker_controller()
 	_apply_data()
 
 	if use_placeholder_visual:
@@ -118,6 +130,34 @@ func _setup_components() -> void:
 
 	vehicle_components.component_damaged.connect(_on_component_damaged)
 	vehicle_components.component_destroyed.connect(_on_component_destroyed)
+
+
+func _setup_worker_controller() -> void:
+	## Attach WorkerController for autonomous job finding (supply chains, terrain clearing)
+	var job_system: Node = get_node_or_null("/root/JobSystem")
+	if not job_system:
+		return  # No job system, skip worker controller
+
+	_worker_controller = WorkerControllerScript.new()
+	_worker_controller.name = "WorkerController"
+	# Set properties BEFORE add_child so _ready() sees them
+	_worker_controller.worker_class = "bulldozer"
+	_worker_controller.move_speed = max_speed
+	_worker_controller.search_radius = 150.0  # Large search radius for bulldozers
+
+	# Also set on self so WorkerController._determine_worker_class can find it
+	set_meta("worker_class", "bulldozer")
+
+	add_child(_worker_controller)
+
+	# Override class in case _determine_worker_class ran before our property was set
+	_worker_controller.worker_class = "bulldozer"
+
+	# Connect to state changes for blade animation
+	if _worker_controller.has_signal("state_changed"):
+		_worker_controller.state_changed.connect(_on_worker_state_changed)
+
+	print("[Bulldozer] WorkerController attached for autonomous job finding")
 
 
 func _apply_data() -> void:
@@ -520,6 +560,16 @@ func _on_component_destroyed(component_type: int) -> void:
 		_destroy()
 
 
+func _on_worker_state_changed(old_state: int, new_state: int) -> void:
+	## Handle WorkerController state changes for blade animation
+	## WorkerController.State: IDLE=0, MOVING_TO_JOB=1, WORKING=2, RETURNING=3, CLEARING_PATH=4
+	match new_state:
+		2, 4:  # WORKING or CLEARING_PATH
+			_lower_blade()
+		0, 1, 3:  # IDLE, MOVING_TO_JOB, or RETURNING
+			_raise_blade()
+
+
 # =============================================================================
 # PUBLIC API
 # =============================================================================
@@ -530,7 +580,13 @@ func is_dead() -> bool:
 
 
 ## Clear a construction zone
+## NOTE: When WorkerController is active, use job system instead of direct calls
+## Set allow_direct_commands = true to bypass this check (for test scenes)
 func clear_zone(zone_id: int, zone_center: Vector3) -> void:
+	if _worker_controller and not allow_direct_commands:
+		push_warning("[Bulldozer] Has WorkerController - use job system for clear_zone")
+		return
+
 	current_zone_id = zone_id
 	clearing_target = zone_center
 	clearing_progress_value = 0.0
@@ -540,7 +596,13 @@ func clear_zone(zone_id: int, zone_center: Vector3) -> void:
 
 
 ## Flatten terrain for firebase foundation
+## NOTE: When WorkerController is active, use job system instead of direct calls
+## Set allow_direct_commands = true to bypass this check (for test scenes)
 func flatten_zone(zone_id: int, zone_center: Vector3) -> void:
+	if _worker_controller and not allow_direct_commands:
+		push_warning("[Bulldozer] Has WorkerController - use job system for flatten_zone")
+		return
+
 	current_zone_id = zone_id
 	clearing_target = zone_center
 	clearing_progress_value = 0.0
@@ -550,7 +612,13 @@ func flatten_zone(zone_id: int, zone_center: Vector3) -> void:
 
 
 ## Cut a path/road between waypoints
+## NOTE: When WorkerController is active, use job system instead of direct calls
+## Set allow_direct_commands = true to bypass this check (for test scenes)
 func cut_path(waypoints: Array[Vector3]) -> void:
+	if _worker_controller and not allow_direct_commands:
+		push_warning("[Bulldozer] Has WorkerController - use job system for cut_path")
+		return
+
 	if waypoints.size() < 2:
 		return
 	path_waypoints = waypoints
@@ -560,8 +628,29 @@ func cut_path(waypoints: Array[Vector3]) -> void:
 	_lower_blade()
 
 
-## Simple move order
+## Simple move order - also handles manual override of WorkerController
+## When called by WorkerController (to navigate to job), this is NOT a manual override.
+## When called by player (right-click command), this IS a manual override.
 func move_to(target: Vector3) -> void:
+	# Skip manual override handling if WorkerController is directing us to a job.
+	# WorkerController calls move_to() during MOVING_TO_JOB and WORKING states
+	# to delegate movement. Only treat as manual override if coming from outside.
+	if _worker_controller:
+		var wc_state: int = _worker_controller.state
+		# WorkerController.State: IDLE=0, MOVING_TO_JOB=1, WORKING=2, RETURNING=3, CLEARING_PATH=4
+		# If WC is actively directing (not IDLE), this is NOT a manual override
+		if wc_state != 0:
+			# WorkerController is controlling movement - don't abandon job
+			pass
+		elif _worker_controller.current_job:
+			# WorkerController is IDLE but has a job - this is a manual player command
+			var job_id: int = _worker_controller.current_job.job_id
+			if job_id == _last_manual_abandon_job_id:
+				return  # Already abandoned this job, skip
+			_last_manual_abandon_job_id = job_id
+			_worker_controller._abandon_job("Manual player command")
+			print("[Bulldozer] Manual override - abandoning job #%d for player command" % job_id)
+
 	if state == State.CLEARING or state == State.FLATTENING or state == State.PATH_CUTTING:
 		# Abort current job
 		clearing_mode = ClearingMode.NONE
@@ -652,3 +741,29 @@ func get_status() -> Dictionary:
 		"blade_down": _blade_down,
 		"health_percent": current_health / max_health * 100.0,
 	}
+
+
+## Selection visual feedback - prevents crashes in SelectionManager
+var _selection_ring: MeshInstance3D = null
+
+func set_selected_visual(selected: bool) -> void:
+	if selected:
+		if not _selection_ring:
+			_selection_ring = MeshInstance3D.new()
+			_selection_ring.name = "SelectionRing"
+			var torus := TorusMesh.new()
+			torus.inner_radius = 2.5
+			torus.outer_radius = 3.0
+			_selection_ring.mesh = torus
+			_selection_ring.rotation.x = PI * 0.5  # Lay flat
+			_selection_ring.position.y = 0.3
+			var mat := StandardMaterial3D.new()
+			mat.albedo_color = Color(0.2, 0.8, 0.3, 0.8)
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_selection_ring.material_override = mat
+			add_child(_selection_ring)
+		_selection_ring.visible = true
+	else:
+		if _selection_ring:
+			_selection_ring.visible = false

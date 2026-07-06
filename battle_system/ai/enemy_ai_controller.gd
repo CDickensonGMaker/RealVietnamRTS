@@ -69,11 +69,23 @@ func _process(delta: float) -> void:
 
 func _collect_existing_units() -> void:
 	"""Find existing enemy units in scene"""
-	var enemies: Array[Node] = get_tree().get_nodes_in_group("enemy_units")
-	for enemy in enemies:
-		if enemy is Node3D and enemy not in controlled_units:
-			controlled_units.append(enemy)
-			_setup_unit(enemy)
+	# Use SpatialHashGrid to find all enemies (get units in a very large radius)
+	if SpatialHashGrid and SpatialHashGrid.has_method("get_enemies_in_radius"):
+		# Get all enemies relative to US faction (i.e., all VC/NVA units)
+		var enemies: Array = SpatialHashGrid.get_enemies_in_radius(
+			Vector3.ZERO, GameEnums.Faction.US_ARMY, 10000.0
+		)
+		for enemy in enemies:
+			if enemy is Node3D and enemy not in controlled_units:
+				controlled_units.append(enemy)
+				_setup_unit(enemy)
+	else:
+		# Fallback: scan enemy group directly (startup only)
+		var enemies: Array[Node] = get_tree().get_nodes_in_group("enemy_units")
+		for enemy in enemies:
+			if enemy is Node3D and enemy not in controlled_units:
+				controlled_units.append(enemy)
+				_setup_unit(enemy)
 
 
 func _setup_unit(unit: Node3D) -> void:
@@ -117,22 +129,21 @@ func _update_unit_ai(unit: Node3D) -> void:
 
 func _find_nearest_player_unit(from_unit: Node3D) -> Node3D:
 	"""Find the nearest player-controlled unit"""
-	var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
-	var nearest: Node3D = null
-	var nearest_dist: float = INF
+	if not is_instance_valid(from_unit):
+		return null
 
-	for player_unit in player_units:
-		if not is_instance_valid(player_unit):
-			continue
-		if player_unit.has_method("get") and player_unit.get("state") == Squad.State.DEAD:
-			continue
+	# Use SpatialHashGrid for efficient lookup
+	# Enemy AI (VC/NVA) wants to find US/ARVN units
+	if SpatialHashGrid:
+		var nearest: Node3D = SpatialHashGrid.get_nearest_enemy(
+			from_unit.global_position, faction, detection_range
+		)
+		# Validate target is alive
+		if nearest and nearest.has_method("get") and nearest.get("state") == Squad.State.DEAD:
+			return null
+		return nearest
 
-		var dist: float = from_unit.global_position.distance_to(player_unit.global_position)
-		if dist < nearest_dist:
-			nearest_dist = dist
-			nearest = player_unit as Node3D
-
-	return nearest
+	return null
 
 
 func _order_retreat(unit: Node3D) -> void:

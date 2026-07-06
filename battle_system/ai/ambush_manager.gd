@@ -49,37 +49,53 @@ func _process(_delta: float) -> void:
 
 
 func _check_ambush_triggers() -> void:
-	"""Check if any ambushes should trigger"""
-	var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
-
+	"""Check if any ambushes should trigger using SpatialHashGrid"""
 	for ambush in _prepared_ambushes:
 		if ambush.is_triggered:
 			continue
 
-		for unit in player_units:
-			if not is_instance_valid(unit):
-				continue
+		# Use SpatialHashGrid to find player units (US/ARVN) near ambush position
+		var us_units: Array[Node3D] = SpatialHashGrid.get_friendlies_in_radius(
+			ambush.position, ambush.trigger_radius, GameEnums.Faction.US_ARMY
+		)
+		var arvn_units: Array[Node3D] = SpatialHashGrid.get_friendlies_in_radius(
+			ambush.position, ambush.trigger_radius, GameEnums.Faction.ARVN
+		)
 
-			var dist: float = ambush.position.distance_to(unit.global_position)
-			if dist <= ambush.trigger_radius:
+		for unit in us_units:
+			if is_instance_valid(unit):
 				_trigger_ambush(ambush, unit)
 				break
+
+		if not ambush.is_triggered:
+			for unit in arvn_units:
+				if is_instance_valid(unit):
+					_trigger_ambush(ambush, unit)
+					break
 
 
 func _trigger_ambush(ambush: AmbushSite, trigger_unit: Node3D) -> void:
 	"""Trigger an ambush"""
 	ambush.is_triggered = true
 
-	# Find all targets in kill zone
+	# Find all targets in kill zone using SpatialHashGrid
 	var targets: Array[Node3D] = []
-	var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
+	var kill_zone_radius: float = ambush.trigger_radius * 1.5
 
-	for unit in player_units:
-		if not is_instance_valid(unit):
-			continue
-		var dist: float = ambush.position.distance_to(unit.global_position)
-		if dist <= ambush.trigger_radius * 1.5:
-			targets.append(unit as Node3D)
+	# Get US and ARVN units in kill zone
+	var us_targets: Array[Node3D] = SpatialHashGrid.get_friendlies_in_radius(
+		ambush.position, kill_zone_radius, GameEnums.Faction.US_ARMY
+	)
+	var arvn_targets: Array[Node3D] = SpatialHashGrid.get_friendlies_in_radius(
+		ambush.position, kill_zone_radius, GameEnums.Faction.ARVN
+	)
+
+	for unit in us_targets:
+		if is_instance_valid(unit):
+			targets.append(unit)
+	for unit in arvn_targets:
+		if is_instance_valid(unit):
+			targets.append(unit)
 
 	# Order ambush units to attack
 	for vc_unit in ambush.ambush_units:

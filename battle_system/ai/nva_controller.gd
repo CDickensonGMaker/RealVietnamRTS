@@ -324,10 +324,24 @@ func _coordinate_nearby_attack(leader: Node3D, target: Node3D) -> void:
 
 
 func _count_enemy_strength() -> int:
-	"""Estimate enemy strength"""
-	var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
+	"""Estimate enemy strength using SpatialHashGrid for efficiency"""
+	# Search from target firebase or our spawn center
+	var search_origin: Vector3 = Vector3.ZERO
+	if is_instance_valid(target_firebase):
+		search_origin = target_firebase.global_position
+	else:
+		# Use spawn center as search origin
+		for sp in spawn_points:
+			search_origin += sp
+		search_origin /= float(spawn_points.size())
+
+	# Get enemies within a large radius - NVA needs to know overall enemy strength
+	var player_units: Array[Node3D] = SpatialHashGrid.get_enemies_in_radius(
+		search_origin, GameEnums.Faction.NVA, 200.0
+	)
+
 	var count: int = 0
-	for unit in player_units:
+	for unit: Node3D in player_units:
 		if is_instance_valid(unit):
 			if unit.has_method("get") and unit.get("state") != Squad.State.DEAD:
 				count += 1
@@ -335,10 +349,21 @@ func _count_enemy_strength() -> int:
 
 
 func _find_target_firebase() -> void:
-	"""Find a firebase to target"""
-	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
+	"""Find a firebase to target using EntityCache for efficient lookup"""
+	# Use EntityCache for cached firebase lookups
+	var firebases: Array[Node] = EntityCache.get_firebases()
 	if not firebases.is_empty():
-		target_firebase = firebases[0] as Node3D
+		# Find nearest firebase to our spawn center
+		var spawn_center: Vector3 = Vector3.ZERO
+		for sp in spawn_points:
+			spawn_center += sp
+		spawn_center /= float(spawn_points.size())
+
+		var nearest: Node = EntityCache.get_nearest_firebase(spawn_center)
+		if nearest:
+			target_firebase = nearest as Node3D
+		else:
+			target_firebase = firebases[0] as Node3D
 		print("[NVAController] Target firebase: %s" % target_firebase.name)
 
 
@@ -405,15 +430,23 @@ func _call_artillery_on_target() -> void:
 	if is_instance_valid(target_firebase):
 		target_pos = target_firebase.global_position
 	else:
-		# Find cluster of player units
-		var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
+		# Find cluster of player units using SpatialHashGrid
+		# Search from our spawn center
+		var spawn_center: Vector3 = Vector3.ZERO
+		for sp in spawn_points:
+			spawn_center += sp
+		spawn_center /= float(spawn_points.size())
+
+		var player_units: Array[Node3D] = SpatialHashGrid.get_enemies_in_radius(
+			spawn_center, GameEnums.Faction.NVA, 200.0
+		)
 		if player_units.is_empty():
 			return
 
 		var center: Vector3 = Vector3.ZERO
 		var valid_count: int = 0
-		for unit in player_units:
-			if is_instance_valid(unit) and unit.state != Squad.State.DEAD:
+		for unit: Node3D in player_units:
+			if is_instance_valid(unit) and unit.get("state") != Squad.State.DEAD:
 				center += unit.global_position
 				valid_count += 1
 

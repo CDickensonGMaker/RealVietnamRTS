@@ -79,8 +79,13 @@ func _process(delta: float) -> void:
 
 func _find_supply_depot() -> void:
 	"""Find the supply depot (rear base)"""
-	# Look for a node named "SupplyDepot" or tagged as such
-	var depots: Array[Node] = get_tree().get_nodes_in_group("supply_depots")
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+	var depots: Array[Node] = []
+	if entity_cache:
+		depots = entity_cache.get_supply_depots()
+	else:
+		depots = get_tree().get_nodes_in_group("supply_depots")
 	if not depots.is_empty():
 		_supply_depot = depots[0] as Node3D
 		return
@@ -98,7 +103,13 @@ func _check_firebase_supply_needs() -> void:
 	if not _supply_depot:
 		return
 
-	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+	var firebases: Array[Node] = []
+	if entity_cache:
+		firebases = entity_cache.get_firebases()
+	else:
+		firebases = get_tree().get_nodes_in_group("firebases")
 
 	for fb in firebases:
 		if not is_instance_valid(fb) or not fb is Node3D:
@@ -398,7 +409,13 @@ func set_supply_depot(depot: Node3D) -> void:
 ## Find the best supply depot with available supplies
 func get_best_supply_depot(min_supply: float = 100.0) -> Node3D:
 	"""Find a supply depot with enough supplies for a convoy."""
-	var depots: Array[Node] = get_tree().get_nodes_in_group("supply_depots")
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+	var depots: Array[Node] = []
+	if entity_cache:
+		depots = entity_cache.get_supply_depots()
+	else:
+		depots = get_tree().get_nodes_in_group("supply_depots")
 	var best_depot: Node3D = null
 	var best_supply: float = 0.0
 

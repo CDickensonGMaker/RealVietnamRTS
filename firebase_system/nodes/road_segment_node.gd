@@ -14,11 +14,15 @@ signal road_complete()
 signal vehicle_entered(vehicle: Node3D)
 signal vehicle_exited(vehicle: Node3D)
 
-## Road width in meters
+## Road width in meters (2m for engineer paths, 4m for bulldozer roads)
 @export var road_width: float = 4.0
 
-## Speed multiplier for vehicles on road
+## Base speed multiplier for vehicles on road
 @export var speed_multiplier: float = 1.5
+
+## Road quality (1.0 = bulldozer road, 0.75 = engineer path)
+## Affects final speed multiplier and visual width
+@export var road_quality: float = 1.0
 
 ## Path points defining the road
 var path_points: PackedVector3Array = PackedVector3Array()
@@ -111,8 +115,8 @@ func _setup_detection_areas() -> void:
 		area.collision_layer = 64  # Buildings layer
 		area.collision_mask = 16 | 32  # Vehicles and helicopters
 
-		# Look along segment direction
-		if segment_dir.length() > 0.1:
+		# Look along segment direction (must be in tree for look_at)
+		if segment_dir.length() > 0.1 and area.is_inside_tree():
 			var look_target: Vector3 = area.position + segment_dir
 			look_target.y = area.position.y
 			if look_target.distance_to(area.position) > 0.1:
@@ -154,13 +158,15 @@ func _on_vehicle_exited(body: Node3D) -> void:
 
 func _apply_speed_bonus(vehicle: Node3D, entering: bool) -> void:
 	## Apply or remove speed bonus from vehicle
+	## Final multiplier = base speed_multiplier * road_quality
+	var final_multiplier: float = speed_multiplier * road_quality
 	if vehicle.has_method("set_terrain_speed_modifier"):
 		if entering:
-			vehicle.set_terrain_speed_modifier(speed_multiplier)
+			vehicle.set_terrain_speed_modifier(final_multiplier)
 		else:
 			vehicle.set_terrain_speed_modifier(1.0)
 	elif "terrain_speed_modifier" in vehicle:
-		vehicle.terrain_speed_modifier = speed_multiplier if entering else 1.0
+		vehicle.terrain_speed_modifier = final_multiplier if entering else 1.0
 
 
 ## Set the path points for this road
@@ -317,8 +323,8 @@ func _create_road_mesh(progress: float) -> ArrayMesh:
 		var perp: Vector3 = Vector3(-dir.z, 0, dir.x) * hw
 
 		# Snap Y to terrain
-		p1.y = _get_terrain_height(p1) + 0.02
-		p2.y = _get_terrain_height(p2) + 0.02
+		p1.y = _get_terrain_height(p1) + 0.08
+		p2.y = _get_terrain_height(p2) + 0.08
 
 		# Quad for this segment
 		var v1: Vector3 = p1 - perp - global_position
@@ -403,10 +409,12 @@ func _get_terrain_height(pos: Vector3) -> float:
 
 
 ## Factory: Create a road segment with path
-static func create(points: PackedVector3Array, width: float = 4.0) -> RoadSegmentNode:
+## quality: 1.0 = bulldozer road (full speed), 0.75 = engineer path (slower)
+static func create(points: PackedVector3Array, width: float = 4.0, quality: float = 1.0) -> RoadSegmentNode:
 	var road := RoadSegmentNode.new()
 	if points.size() > 0:
 		road.position = points[0]
 	road.road_width = width
+	road.road_quality = quality
 	road.path_points = points
 	return road

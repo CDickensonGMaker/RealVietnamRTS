@@ -310,8 +310,13 @@ func _find_firebase_at_lz(lz: Node3D) -> Node3D:
 	if lz.has_method("get") and lz.get("firebase") != null:
 		return lz.firebase
 
-	# Search for nearest firebase
-	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
+	# Search for nearest firebase using EntityCache for efficiency
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+	var firebases: Array[Node] = []
+	if entity_cache:
+		firebases = entity_cache.get_firebases()
+	else:
+		firebases = get_tree().get_nodes_in_group("firebases")
 	var nearest: Node3D = null
 	var nearest_dist: float = 100.0  # Max search radius
 
@@ -489,7 +494,13 @@ func _connect_to_supply_manager() -> void:
 func _on_road_blocked(segment_id: int) -> void:
 	"""Handle road blocked signal - check if any firebase is cut off"""
 	# When a road is blocked, check all firebases for access
-	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+	var firebases: Array[Node] = []
+	if entity_cache:
+		firebases = entity_cache.get_firebases()
+	else:
+		firebases = get_tree().get_nodes_in_group("firebases")
 
 	for fb in firebases:
 		if not is_instance_valid(fb):
@@ -509,7 +520,13 @@ func _on_road_blocked(segment_id: int) -> void:
 
 func _on_road_repaired(segment_id: int) -> void:
 	"""Handle road repaired signal - update cut-off status"""
-	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+	var firebases: Array[Node] = []
+	if entity_cache:
+		firebases = entity_cache.get_firebases()
+	else:
+		firebases = get_tree().get_nodes_in_group("firebases")
 
 	for fb in firebases:
 		if not is_instance_valid(fb):

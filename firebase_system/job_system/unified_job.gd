@@ -96,6 +96,9 @@ var clearing_zone: Node = null
 ## This is the node-based visual representation of the job
 var job_node: Node = null
 
+## Static cached terrain reference (shared across all jobs to avoid repeated lookups)
+static var _cached_terrain: Node = null
+
 ## Signals
 signal state_changed(job: UnifiedJob, old_state: State, new_state: State)
 signal progress_updated(job: UnifiedJob, progress: float)
@@ -253,29 +256,30 @@ func _calculate_work_positions() -> void:
 	_apply_terrain_heights()
 
 
+## Get cached terrain node (static to share across all jobs)
+static func _get_terrain_node() -> Node:
+	if _cached_terrain != null and is_instance_valid(_cached_terrain):
+		return _cached_terrain
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return null
+	_cached_terrain = tree.root.get_node_or_null("/root/UnifiedTerrain")
+	if _cached_terrain == null:
+		_cached_terrain = tree.root.get_node_or_null("/root/TerrainIntegration")
+	return _cached_terrain
+
+
 ## Apply actual terrain heights to work positions
 ## Called after initial calculation and when terrain changes
 func _apply_terrain_heights() -> void:
-	# Try UnifiedTerrain first (new system)
-	var unified_terrain: Node = Engine.get_singleton("UnifiedTerrain") if Engine.has_singleton("UnifiedTerrain") else null
-	if not unified_terrain:
-		unified_terrain = Engine.get_main_loop().root.get_node_or_null("/root/UnifiedTerrain")
-
-	# Fall back to TerrainIntegration
-	var terrain_integration: Node = null
-	if not unified_terrain:
-		terrain_integration = Engine.get_main_loop().root.get_node_or_null("/root/TerrainIntegration")
-
-	if not unified_terrain and not terrain_integration:
+	var terrain := _get_terrain_node()
+	if terrain == null or not terrain.has_method("get_height_at"):
 		return  # No terrain system available - positions stay at Y=0
 
 	# Update Y values for all work positions
 	for i in range(work_positions.size()):
 		var pos := work_positions[i]
-		if unified_terrain and unified_terrain.has_method("get_height_at"):
-			pos.y = unified_terrain.get_height_at(pos)
-		elif terrain_integration and terrain_integration.has_method("get_height_at"):
-			pos.y = terrain_integration.get_height_at(pos)
+		pos.y = terrain.get_height_at(pos)
 		work_positions[i] = pos
 
 

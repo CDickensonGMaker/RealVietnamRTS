@@ -166,21 +166,40 @@ func _on_packed() -> void:
 # =============================================================================
 
 func _update_units_in_range() -> void:
-	"""Update list of units in supply range"""
+	"""Update list of units in supply range using SpatialHashGrid"""
 	units_in_range.clear()
 
-	# Query spatial hash or use group-based search
-	var all_units: Array = get_tree().get_nodes_in_group("all_units")
+	# Get our faction from parent
+	var parent: Node3D = get_parent()
+	var our_faction: int = parent.get("faction") if parent and "faction" in parent else GameEnums.Faction.US_ARMY
 
-	for unit_node in all_units:
-		var unit: Node3D = unit_node as Node3D
-		if not unit or unit == get_parent():
+	# Use SpatialHashGrid for efficient spatial query
+	var nearby_units: Array[Node3D] = SpatialHashGrid.get_friendlies_in_radius(
+		global_position, supply_radius, our_faction
+	)
+
+	for unit in nearby_units:
+		if not is_instance_valid(unit) or unit == parent:
 			continue
+		units_in_range.append(unit)
 
-		var dist: float = global_position.distance_to(unit.global_position)
-		if dist <= supply_radius:
-			# Only resupply friendly units
-			if _is_friendly(unit):
+	# Also check allied faction (US+ARVN are allies, VC+NVA are allies)
+	var allied_faction: int = -1
+	if our_faction == GameEnums.Faction.US_ARMY:
+		allied_faction = GameEnums.Faction.ARVN
+	elif our_faction == GameEnums.Faction.ARVN:
+		allied_faction = GameEnums.Faction.US_ARMY
+	elif our_faction == GameEnums.Faction.VC:
+		allied_faction = GameEnums.Faction.NVA
+	elif our_faction == GameEnums.Faction.NVA:
+		allied_faction = GameEnums.Faction.VC
+
+	if allied_faction >= 0:
+		var allied_units: Array[Node3D] = SpatialHashGrid.get_friendlies_in_radius(
+			global_position, supply_radius, allied_faction
+		)
+		for unit in allied_units:
+			if is_instance_valid(unit) and unit != parent and unit not in units_in_range:
 				units_in_range.append(unit)
 
 

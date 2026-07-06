@@ -4,11 +4,11 @@ class_name BillboardVegetation
 ## Uses 5 intersecting quads (cross/star formation) for 3D depth illusion
 ## Provides LOD between full 3D trees and distant fog
 ##
-## NOTE: Billboard system is DISABLED by default - using 3D tree models only.
-## Set enabled = true to re-enable billboard rendering.
+## NOTE: Billboard system provides mid-distance tree rendering (150-1500m).
+## Set enabled = false to use only 3D tree models (VegetationManager).
 
-## Master enable flag - set to false to disable all billboard rendering
-var enabled: bool = false
+## Master enable flag - enables billboard rendering for mid-distance trees
+var enabled: bool = true
 
 ## Billboard LOD distances - billboards fill in the "jungle edge" beyond 3D trees
 ## 3D trees: visible 0-200m, hidden >250m (VegetationLODManager)

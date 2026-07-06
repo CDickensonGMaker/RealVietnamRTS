@@ -89,20 +89,33 @@ func _process(delta: float) -> void:
 
 
 func _assess_threat() -> void:
-	"""Check for nearby enemy units"""
-	var enemy_groups: Array[String] = ["enemy_units"]
+	"""Check for nearby enemy units using SpatialHashGrid for efficient spatial query"""
 	var threat_count: int = 0
 	var threat_distance: float = 0.0
 
-	for group in enemy_groups:
-		var enemies: Array[Node] = get_tree().get_nodes_in_group(group)
-		for enemy in enemies:
-			if not is_instance_valid(enemy):
-				continue
-			var dist: float = global_position.distance_to(enemy.global_position)
-			if dist < 100.0:  # Threat range
-				threat_count += 1
-				threat_distance += dist
+	# LZs are assumed to be US/ARVN controlled - check for VC/NVA enemies
+	# Query for VC enemies
+	var vc_enemies: Array[Node3D] = SpatialHashGrid.get_friendlies_in_radius(
+		global_position, 100.0, GameEnums.Faction.VC
+	)
+	# Query for NVA enemies
+	var nva_enemies: Array[Node3D] = SpatialHashGrid.get_friendlies_in_radius(
+		global_position, 100.0, GameEnums.Faction.NVA
+	)
+
+	for enemy in vc_enemies:
+		if not is_instance_valid(enemy):
+			continue
+		var dist: float = global_position.distance_to(enemy.global_position)
+		threat_count += 1
+		threat_distance += dist
+
+	for enemy in nva_enemies:
+		if not is_instance_valid(enemy):
+			continue
+		var dist: float = global_position.distance_to(enemy.global_position)
+		threat_count += 1
+		threat_distance += dist
 
 	# Calculate threat level
 	if threat_count > 0:

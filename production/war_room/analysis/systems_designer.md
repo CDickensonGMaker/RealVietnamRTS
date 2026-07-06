@@ -1,80 +1,72 @@
-# Systems Designer Analysis: Depot Resource System
+# Systems Designer Analysis: Vegetation Pipeline Failure
 
-## Core Architecture Proposal
+## Issue #2: Trees Not Showing - ROOT CAUSES IDENTIFIED
 
-### Two Depot Types, Parallel Systems
+### Critical Finding #1: BillboardVegetation is DISABLED
 
-| Depot | Building | Resource | Consumers |
-|-------|----------|----------|-----------|
-| **Water Tank** | Renamed from FUEL_DEPOT (type 16) | Water | Infantry (Squad) |
-| **Fuel Depot** | New building needed | Fuel | Vehicles |
+In `terrain/vegetation/billboard_vegetation.gd` line 11:
+```gdscript
+var enabled: bool = false  # <-- DISABLED BY DEFAULT!
+```
 
-### Depot Data Model
+This means:
+- **No distant trees render** (150-1500m range)
+- Only close-range 3D trees from VegetationManager render
+- If VegetationManager also fails, you get ZERO trees
+
+### Critical Finding #2: Local Jungle Spawning Commented Out
+
+In `supply_loop_test.gd` lines 147-149:
+```gdscript
+# Note: VegetationManager already spawns jungle trees via chunks
+# Don't spawn additional test trees - they cause "ghost jungle" duplication
+# _spawn_jungle_along_route()  # <-- DISABLED!
+```
+
+The test scene disabled its own tree spawning, relying entirely on VegetationManager.
+
+### Critical Finding #3: VegetationManager Depends on Chunks
+
+VegetationManager spawns trees via `generate_for_chunk(chunk_key)`. This requires:
+1. TerrainManager to generate chunks
+2. Chunks to be loaded via `_load_chunk()`
+3. Chunk terrain data to exist
+
+**If terrain generation freezes or fails**, no chunks load, so no trees spawn.
+
+### Critical Finding #4: Camera Reference Required
 
 ```gdscript
-# On PlacedBuilding or new DepotBuilding class
-@export var depot_type: GameEnums.DepotType  # WATER, FUEL
-@export var max_reservoir: float = 10000.0
-@export var current_reservoir: float = 10000.0
-@export var resupply_radius: float = 50.0  # Smaller than firebase 168m
-@export var refill_rate: float = 5.0  # Units per second to consumers
-@export var regen_rate: float = 2.0  # Reservoir regen per second
-@export var maintenance_cost: int = 100  # Global supply
-@export var maintenance_interval: float = 120.0  # Every 2 minutes
+func _process(delta: float) -> void:
+    if not _camera:
+        return  # <-- EXITS EARLY IF NO CAMERA
 ```
 
-### Resource Flow Diagram
+VegetationManager needs `set_camera()` called. Test scene does this, but timing matters.
+
+### Data Flow
 
 ```
-┌─────────────────┐
-│  Global Supply  │
-│   (SupplyMgr)   │
-└────────┬────────┘
-         │ -100 supply every 2 min
-         ▼
-┌─────────────────┐     +2/sec regen
-│   Depot         │◄────────────────┐
-│  Reservoir      │                 │
-│  (10,000 max)   │                 │
-└────────┬────────┘                 │
-         │ -5/sec to each unit      │
-         │ (only if unit < 100%)    │
-         ▼                          │
-┌─────────────────┐                 │
-│  Unit Resource  │   Stops at 100% │
-│  (water/fuel)   │─────────────────┘
-└─────────────────┘
+TerrainManager.generate_terrain()
+  └─> Creates chunks
+        └─> VegetationManager.generate_for_chunk()
+              └─> Spawns trees per chunk
+
+If generate_terrain() hangs:
+  └─> No chunks created
+        └─> No generate_for_chunk() calls
+              └─> No trees
 ```
 
-### Key Rules
+## Verdict: CASCADING FAILURE
 
-1. **Depot → Unit**: Only flows when unit is below 100%
-2. **Supply → Depot**: Maintenance tick deducts from global supply
-3. **Depot Regen**: Only active when global supply available
-4. **Depot Offline**: If depot can't pay maintenance, it stops providing resources
+Trees don't show because:
+1. BillboardVegetation disabled (distant trees)
+2. VegetationManager depends on chunks that never load (terrain freeze)
+3. Local fallback spawning is commented out
 
-## Integration Points
+## Recommended Fix
 
-### Existing Systems to Modify
-
-1. **Squad.gd** - Change `_auto_resupply()` to query nearby Water Tanks
-2. **Vehicle.gd** - Add fuel system parallel to Squad's water
-3. **Firebase.gd** - Register child depots, maybe track depot list
-4. **SupplyManager** - Add maintenance tick system
-
-### New Components
-
-1. **DepotManager** (autoload?) - Track all depots, run maintenance ticks
-2. **Depot signals** in BattleSignals:
-   - `depot_reservoir_changed(depot, old_level, new_level)`
-   - `depot_maintenance_failed(depot)`
-   - `depot_empty(depot)`
-
-## Recommended Implementation Order
-
-1. Rename FUEL_DEPOT → WATER_TANK in enum
-2. Add reservoir properties to PlacedBuilding
-3. Modify Squad._auto_resupply() to consume from depots
-4. Add maintenance tick to SupplyManager
-5. Add vehicle fuel system (parallel to water)
-6. Add new FUEL_DEPOT building type
+1. Enable BillboardVegetation: `enabled = true`
+2. Add fallback tree spawning if chunks fail
+3. Fix the terrain freeze (primary cause)

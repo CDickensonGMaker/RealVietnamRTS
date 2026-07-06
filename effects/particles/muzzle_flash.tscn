@@ -1,0 +1,31 @@
+[gd_scene load_steps=3 format=3 uid="uid://cz2ozj7h8xwmk"]
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_muzzle"]
+emission_shape = 1
+emission_sphere_radius = 0.1
+direction = Vector3(0, 0, 1)
+spread = 15.0
+initial_velocity_min = 5.0
+initial_velocity_max = 10.0
+gravity = Vector3(0, 0, 0)
+scale_min = 0.5
+scale_max = 1.5
+color = Color(1, 0.8, 0.3, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_flash"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(1, 0.8, 0.3, 0.9)
+emission_enabled = true
+emission = Color(1, 0.7, 0.2, 1)
+emission_energy_multiplier = 3.0
+billboard_mode = 3
+
+[node name="MuzzleFlash" type="GPUParticles3D"]
+emitting = false
+amount = 8
+lifetime = 0.1
+one_shot = true
+explosiveness = 0.9
+process_material = SubResource("ParticleProcessMaterial_muzzle")
+draw_pass_1 = null

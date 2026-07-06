@@ -55,14 +55,25 @@ func _ready() -> void:
 
 func _discover_supply_points() -> void:
 	"""Find firebases and depots in the scene"""
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+
 	# Find firebases
-	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
+	var firebases: Array[Node] = []
+	if entity_cache:
+		firebases = entity_cache.get_firebases()
+	else:
+		firebases = get_tree().get_nodes_in_group("firebases")
 	for fb in firebases:
 		if fb is Node3D and fb not in supply_points:
 			supply_points.append(fb as Node3D)
 
 	# Find supply depots
-	var depots: Array[Node] = get_tree().get_nodes_in_group("supply_depots")
+	var depots: Array[Node] = []
+	if entity_cache:
+		depots = entity_cache.get_supply_depots()
+	else:
+		depots = get_tree().get_nodes_in_group("supply_depots")
 	for depot in depots:
 		if depot is Node3D and depot not in supply_points:
 			supply_points.append(depot as Node3D)
@@ -257,7 +268,13 @@ func get_supply_point_count() -> int:
 func get_all_supply_depots() -> Array[Node3D]:
 	"""Get all registered supply depots."""
 	var depots: Array[Node3D] = []
-	var depot_nodes: Array[Node] = get_tree().get_nodes_in_group("supply_depots")
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+	var depot_nodes: Array[Node] = []
+	if entity_cache:
+		depot_nodes = entity_cache.get_supply_depots()
+	else:
+		depot_nodes = get_tree().get_nodes_in_group("supply_depots")
 	for node in depot_nodes:
 		if node is Node3D:
 			depots.append(node as Node3D)

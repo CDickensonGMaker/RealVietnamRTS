@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cw8x5mn9p3aog"]
+
+[ext_resource type="Script" path="res://test_scenes/procedural_anim/procedural_anim_test.gd" id="1_main"]
+
+[node name="ProceduralAnimTest" type="Node3D"]
+script = ExtResource("1_main")

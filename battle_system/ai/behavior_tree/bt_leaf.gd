@@ -211,8 +211,23 @@ class Retreat extends BTLeaf:
 		retreat_distance = distance
 
 	func tick(_delta: float) -> Status:
-		# Find direction away from enemies
-		var enemies: Array[Node] = actor.get_tree().get_nodes_in_group("player_units")
+		if not is_instance_valid(actor):
+			return Status.FAILURE
+
+		# Find direction away from enemies using SpatialHashGrid
+		# This node is used by enemy units (VC/NVA) retreating from player units
+		var my_faction: int = GameEnums.Faction.VC
+		if actor.has_method("get") and actor.get("faction") != null:
+			my_faction = actor.faction
+
+		if not SpatialHashGrid:
+			return Status.FAILURE
+
+		# Get enemies within retreat consideration range
+		var enemies: Array = SpatialHashGrid.get_enemies_in_radius(
+			actor.global_position, my_faction, retreat_distance * 3.0
+		)
+
 		if enemies.is_empty():
 			return Status.FAILURE
 

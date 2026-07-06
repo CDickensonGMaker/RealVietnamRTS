@@ -52,6 +52,10 @@ var _rebuild_queue: Array[Vector2i] = []
 #var _rebuild_accumulator: float = 0.0  # Reserved for async rebuild timing
 const REBUILD_BUDGET_MS := 8.0  # Max rebuild time per frame
 
+# Deferred loading queue - prevents freeze when camera moves to new areas
+var _load_queue: Array[Vector2i] = []
+const LOAD_BUDGET_MS := 12.0  # Max chunk loading time per frame (slightly more than rebuild)
+
 
 func _ready() -> void:
 	# Calculate grid dimensions
@@ -73,12 +77,33 @@ func _process(_delta: float) -> void:
 	if not is_ready:
 		return
 
+	# Process deferred chunk loading (prevents frame spikes when camera moves)
+	_process_load_queue()
+
 	# Process deferred chunk rebuilds (prevents frame spikes)
 	_process_rebuild_queue()
 
 	# Stream chunks around camera
 	if camera:
 		_stream_chunks_around_camera()
+
+
+## Process queued chunk loading with time budget
+## Prevents freezes when camera moves to new areas with many unloaded chunks
+func _process_load_queue() -> void:
+	if _load_queue.is_empty():
+		return
+
+	var start_time := Time.get_ticks_msec()
+	while not _load_queue.is_empty():
+		# Check time budget
+		if Time.get_ticks_msec() - start_time > LOAD_BUDGET_MS:
+			break  # Continue next frame
+
+		var coord: Vector2i = _load_queue.pop_front()
+		# Double-check not already loaded (could have been loaded by previous iteration)
+		if not chunks.has(coord) and coord not in loading_chunks:
+			_load_chunk(coord)
 
 
 ## Process queued chunk rebuilds with time budget
@@ -225,7 +250,8 @@ func _stream_chunks_around_camera() -> void:
 	_unload_distant_chunks(camera_chunk, unload_distance)
 
 
-## Load all chunks within radius of center
+## Queue chunks within radius of center for deferred loading
+## Chunks are loaded over multiple frames to prevent freezes
 func _load_chunks_around(center: Vector2i, radius: int) -> void:
 	for dz in range(-radius, radius + 1):
 		for dx in range(-radius, radius + 1):
@@ -237,11 +263,12 @@ func _load_chunks_around(center: Vector2i, radius: int) -> void:
 			if coord.y < 0 or coord.y >= chunks_per_side:
 				continue
 
-			# Skip if already loaded or loading
-			if chunks.has(coord) or coord in loading_chunks:
+			# Skip if already loaded, loading, or queued
+			if chunks.has(coord) or coord in loading_chunks or coord in _load_queue:
 				continue
 
-			_load_chunk(coord)
+			# Queue for deferred loading instead of immediate
+			_load_queue.append(coord)
 
 
 ## Load a single chunk
@@ -338,11 +365,15 @@ func _world_to_chunk(world_pos: Vector3) -> Vector2i:
 ## Get terrain height at world position (O(1) bilinear interpolation)
 ## This is the primary API for unit movement - does NOT use physics
 func get_height_at(world_pos: Vector3) -> float:
+	if not heightmap:
+		return 0.0
 	return heightmap.sample_world(world_pos.x, world_pos.z)
 
 
 ## Get terrain normal at world position
 func get_normal_at(world_pos: Vector3) -> Vector3:
+	if not heightmap:
+		return Vector3.UP
 	return heightmap.get_normal_world(world_pos.x, world_pos.z)
 
 

@@ -411,6 +411,8 @@ func _connect_signals() -> void:
 	# Connect to build menu popup
 	if _build_menu_popup.has_signal("building_selected"):
 		_build_menu_popup.building_selected.connect(_on_building_selected)
+	if _build_menu_popup.has_signal("road_placement_requested"):
+		_build_menu_popup.road_placement_requested.connect(_on_road_placement_requested)
 
 	# Connect to attack-move mode from MoveOrderHandler
 	var move_handler: Node = get_node_or_null("/root/MoveOrderHandler")
@@ -694,6 +696,35 @@ func _on_building_selected(building_key: String, placement_mode: int) -> void:
 			set_cursor_mode(CursorModeScript.Mode.PAINT_BUILD, context)
 		_:
 			set_cursor_mode(CursorModeScript.Mode.BUILDING_PLACE, context)
+
+
+func _on_road_placement_requested() -> void:
+	## Handle road placement request from build menu
+	## Uses PlacementController's road drawing mode
+	print("[BattleHUD] Road placement requested - entering road drawing mode")
+
+	if _placement_controller and _placement_controller.has_method("start_road_placement"):
+		_placement_controller.start_road_placement()
+
+		# Connect road signals if not already connected
+		if not _placement_controller.is_connected("road_committed", _on_road_committed):
+			_placement_controller.road_committed.connect(_on_road_committed)
+
+		# Store context for road placement
+		_mode_context = {
+			"building_key": "road",
+			"placement_mode": BuildMenuPopupScript.PlacementMode.ROAD,
+		}
+	else:
+		# Fallback: use cursor mode system
+		print("[BattleHUD] PlacementController doesn't support road placement, using cursor mode")
+		set_cursor_mode(CursorModeScript.Mode.PAINT_ROAD, {"building_key": "road"})
+
+
+func _on_road_committed(path_points: PackedVector3Array, cost: float) -> void:
+	## Handle road committed from PlacementController
+	print("[BattleHUD] Road committed: %d waypoints, cost %.1f supply" % [path_points.size(), cost])
+	_mode_context.clear()
 
 
 func _start_fire_mission_mode() -> void:

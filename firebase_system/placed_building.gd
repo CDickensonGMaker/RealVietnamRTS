@@ -81,7 +81,13 @@ func _register_with_firebase_system() -> void:
 
 func _find_nearest_firebase() -> Firebase:
 	"""Find the nearest firebase (active or not) within reasonable range"""
-	var firebases: Array = get_tree().get_nodes_in_group("firebases")
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+	var firebases: Array = []
+	if entity_cache:
+		firebases = entity_cache.get_firebases()
+	else:
+		firebases = get_tree().get_nodes_in_group("firebases")
 	var nearest: Firebase = null
 	var nearest_dist: float = INF
 

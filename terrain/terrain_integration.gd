@@ -44,6 +44,11 @@ var unified_terrain: Node  # UnifiedTerrainEngine (new system - provides proper 
 var _is_initialized: bool = false
 var _camera: Camera3D
 
+# Terrain update debouncing (prevents expensive chunk rebuilds on every carve)
+var _terrain_dirty_regions: Array[Rect2i] = []
+var _terrain_rebuild_pending: bool = false
+const TERRAIN_REBUILD_INTERVAL: float = 0.2  # Rebuild chunks at most 5 times per second
+
 
 func _ready() -> void:
 	# Try to get UnifiedTerrainEngine autoload
@@ -603,22 +608,42 @@ func _on_terrain_grid_updated(region: Rect2i) -> void:
 
 
 func _on_unified_terrain_modified(region: Rect2i) -> void:
-	# UnifiedTerrainEngine terrain was modified - sync with legacy TerrainGrid
+	# UnifiedTerrainEngine terrain was modified - sync with legacy TerrainGrid IMMEDIATELY
+	# (queries need accurate data right away)
 	if terrain_grid and terrain_grid.has_method("update_region_from_heightmap"):
 		terrain_grid.update_region_from_heightmap(region)
 
+	# Queue expensive visual updates (chunk mesh rebuild, vegetation) for batched processing
+	_terrain_dirty_regions.append(region)
+	if not _terrain_rebuild_pending:
+		_terrain_rebuild_pending = true
+		# Schedule the rebuild after a short delay to batch multiple modifications
+		get_tree().create_timer(TERRAIN_REBUILD_INTERVAL).timeout.connect(_flush_terrain_visual_updates)
+
+
+func _flush_terrain_visual_updates() -> void:
+	"""Process all queued terrain visual updates in a single batch"""
+	_terrain_rebuild_pending = false
+	if _terrain_dirty_regions.is_empty():
+		return
+
+	# Merge all queued regions into one
+	var merged: Rect2i = _terrain_dirty_regions[0]
+	for i in range(1, _terrain_dirty_regions.size()):
+		merged = merged.merge(_terrain_dirty_regions[i])
+	_terrain_dirty_regions.clear()
+
 	# Rebuild visual mesh chunks in TerrainManager
-	# Convert gameplay region to heightmap cell region for chunk rebuilding
 	if terrain_manager and terrain_manager.has_method("_rebuild_chunks_in_region"):
 		# Region is in gameplay coords (4m cells), convert to heightmap coords (2m cells)
 		var heightmap_region := Rect2i(
-			region.position * 2,
-			region.size * 2
+			merged.position * 2,
+			merged.size * 2
 		)
 		terrain_manager._rebuild_chunks_in_region(heightmap_region)
 
-	# Also trigger vegetation update
-	_on_vegetation_updated(region)
+	# Update vegetation for the merged region
+	_on_vegetation_updated(merged)
 
 
 # =============================================================================

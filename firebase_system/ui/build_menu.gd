@@ -6,6 +6,7 @@ class_name BuildMenu
 signal building_selected(building_type: int)
 signal build_job_created(job: Resource)  # Emits the UnifiedJob created
 signal menu_closed()
+signal road_placement_requested()  # Player wants to draw a road
 
 const BuildingData = preload("res://firebase_system/building_data.gd")
 const Firebase = preload("res://firebase_system/firebase.gd")
@@ -80,7 +81,6 @@ func _create_ui() -> void:
 
 	_create_category(main_vbox, "Support", [
 		BuildingData.BuildingType.HELIPAD,
-		BuildingData.BuildingType.AMMO_BUNKER,
 		BuildingData.BuildingType.MEDICAL_STATION,
 		BuildingData.BuildingType.TOC,
 		BuildingData.BuildingType.COMMO_BUNKER,
@@ -90,6 +90,32 @@ func _create_ui() -> void:
 		BuildingData.BuildingType.ARTILLERY_PIT,
 		BuildingData.BuildingType.TANK_REVETMENT,
 	])
+
+	# Supply category - special items for supply chains
+	_create_supply_category(main_vbox)
+
+
+func _create_supply_category(parent: VBoxContainer) -> void:
+	"""Create the Supply category with road building"""
+	var category_label := Label.new()
+	category_label.text = "— Supply —"
+	category_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	category_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.5))
+	parent.add_child(category_label)
+
+	# Road button (special - not a building type)
+	var road_btn := Button.new()
+	road_btn.text = "Road (0.5/m)"
+	road_btn.tooltip_text = "Draw a supply road. Cost: 0.5 supply per meter.\nBulldozers build roads (1.0x speed), Engineers build paths (0.75x speed)."
+	road_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	road_btn.pressed.connect(_on_road_button_pressed)
+	parent.add_child(road_btn)
+
+
+func _on_road_button_pressed() -> void:
+	"""Handle road button press - enter road drawing mode"""
+	road_placement_requested.emit()
+	_show_status("Click and drag to draw road", Color.YELLOW)
 
 
 func _create_category(parent: VBoxContainer, title: String, building_types: Array) -> void:
@@ -232,7 +258,7 @@ func _find_empty_position(center: Vector3, footprint: Vector2) -> Vector3:
 	]
 
 	for offset in ring_offsets:
-		var test_pos := center + offset
+		var test_pos: Vector3 = center + offset
 		var validation: Dictionary = job_system.validate_placement(test_pos, footprint)
 		if validation.valid:
 			return test_pos

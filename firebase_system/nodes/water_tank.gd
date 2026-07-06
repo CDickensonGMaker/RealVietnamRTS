@@ -150,19 +150,14 @@ func _get_firebase_population(firebase: Node3D) -> int:
 		var garrison_array: Array = firebase.garrison
 		return garrison_array.size()
 
-	# Count units in "all_units" within firebase radius
+	# Count units within firebase radius using SpatialHashGrid
 	var radius: float = 50.0
 	if firebase.has_method("get_firebase_radius"):
 		radius = firebase.get_firebase_radius()
 
-	var count := 0
-	for unit in get_tree().get_nodes_in_group("all_units"):
-		if not is_instance_valid(unit) or not unit is Node3D:
-			continue
-		if unit.global_position.distance_to(firebase.global_position) <= radius:
-			count += 1
-
-	return count
+	# Use SpatialHashGrid for efficient spatial query
+	var units: Array[Node3D] = SpatialHashGrid.get_units_in_radius(firebase.global_position, radius)
+	return units.size()
 
 
 # =============================================================================

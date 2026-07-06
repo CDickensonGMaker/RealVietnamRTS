@@ -311,26 +311,45 @@ func _update_unit_ai(unit: Node3D) -> void:
 
 func _find_ambush_opportunity() -> Node3D:
 	"""Find a good target for ambush"""
-	var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
+	# Use SpatialHashGrid for efficient enemy lookup - VC faction looks for US/ARVN enemies
+	# Search from our position or a controlled unit's position
+	var search_origin: Vector3 = global_position
+	if not controlled_units.is_empty() and is_instance_valid(controlled_units[0]):
+		search_origin = controlled_units[0].global_position
 
-	for unit in player_units:
+	# Get enemies within detection range
+	var player_units: Array[Node3D] = SpatialHashGrid.get_enemies_in_radius(
+		search_origin, GameEnums.Faction.VC, detection_range * 2.0
+	)
+
+	for unit: Node3D in player_units:
 		if not is_instance_valid(unit):
 			continue
 
-		# Check if unit is isolated (no nearby friendlies)
-		var nearby_friendlies: int = 0
-		for other in player_units:
-			if other == unit or not is_instance_valid(other):
-				continue
-			var dist: float = unit.global_position.distance_to(other.global_position)
-			if dist < 20.0:
-				nearby_friendlies += 1
+		# Check if unit is isolated (no nearby friendlies) using SpatialHashGrid
+		# Get friendlies of the target unit (enemies to us)
+		var nearby_friendlies: Array[Node3D] = SpatialHashGrid.get_friendlies_in_radius(
+			unit.global_position, _get_unit_faction(unit), 20.0
+		)
+		# Subtract 1 because the unit itself is included
+		var friendlies_count: int = maxi(0, nearby_friendlies.size() - 1)
 
 		# Isolated unit = good ambush target
-		if nearby_friendlies <= 1:
-			return unit as Node3D
+		if friendlies_count <= 1:
+			return unit
 
 	return null
+
+
+func _get_unit_faction(unit: Node3D) -> int:
+	"""Get faction of a unit"""
+	if unit.has_method("get") and unit.get("data") != null:
+		if unit.data.get("faction") != null:
+			return unit.data.faction
+	# Default to US_ARMY for player units
+	if unit.is_in_group("player_units"):
+		return GameEnums.Faction.US_ARMY
+	return GameEnums.Faction.US_ARMY
 
 
 func _consider_trap_placement() -> void:
@@ -338,13 +357,21 @@ func _consider_trap_placement() -> void:
 	if placed_traps.size() >= max_traps:
 		return
 
-	# Find patrol routes or choke points
-	var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
+	# Find patrol routes or choke points - use SpatialHashGrid for efficient lookup
+	# Search from a controlled unit's position if available
+	var search_origin: Vector3 = global_position
+	if not controlled_units.is_empty() and is_instance_valid(controlled_units[0]):
+		search_origin = controlled_units[0].global_position
+
+	# Get nearby enemies to place traps in their patrol area
+	var player_units: Array[Node3D] = SpatialHashGrid.get_enemies_in_radius(
+		search_origin, GameEnums.Faction.VC, 100.0
+	)
 	if player_units.is_empty():
 		return
 
 	# Place trap ahead of likely patrol route
-	var unit: Node3D = player_units[randi() % player_units.size()] as Node3D
+	var unit: Node3D = player_units[randi() % player_units.size()]
 	if not is_instance_valid(unit):
 		return
 

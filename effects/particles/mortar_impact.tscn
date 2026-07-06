@@ -1,0 +1,75 @@
+[gd_scene load_steps=5 format=3 uid="uid://bxjkz5m2rgphq"]
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_explosion"]
+emission_shape = 1
+emission_sphere_radius = 0.5
+direction = Vector3(0, 1, 0)
+spread = 90.0
+initial_velocity_min = 8.0
+initial_velocity_max = 15.0
+gravity = Vector3(0, -5, 0)
+scale_min = 1.0
+scale_max = 3.0
+color = Color(1, 0.6, 0.2, 0.9)
+color_ramp = null
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_smoke"]
+emission_shape = 1
+emission_sphere_radius = 1.0
+direction = Vector3(0, 1, 0)
+spread = 45.0
+initial_velocity_min = 2.0
+initial_velocity_max = 5.0
+gravity = Vector3(0, 1, 0)
+scale_min = 2.0
+scale_max = 5.0
+color = Color(0.3, 0.3, 0.3, 0.6)
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_debris"]
+emission_shape = 1
+emission_sphere_radius = 0.3
+direction = Vector3(0, 1, 0)
+spread = 60.0
+initial_velocity_min = 10.0
+initial_velocity_max = 20.0
+gravity = Vector3(0, -15, 0)
+scale_min = 0.1
+scale_max = 0.3
+color = Color(0.4, 0.35, 0.25, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_billboard"]
+transparency = 1
+shading_mode = 0
+billboard_mode = 3
+
+[node name="MortarImpact" type="Node3D"]
+
+[node name="Explosion" type="GPUParticles3D" parent="."]
+emitting = false
+amount = 24
+lifetime = 0.4
+one_shot = true
+explosiveness = 1.0
+process_material = SubResource("ParticleProcessMaterial_explosion")
+
+[node name="Smoke" type="GPUParticles3D" parent="."]
+emitting = false
+amount = 16
+lifetime = 1.5
+one_shot = true
+explosiveness = 0.8
+process_material = SubResource("ParticleProcessMaterial_smoke")
+
+[node name="Debris" type="GPUParticles3D" parent="."]
+emitting = false
+amount = 32
+lifetime = 0.8
+one_shot = true
+explosiveness = 1.0
+process_material = SubResource("ParticleProcessMaterial_debris")
+
+[node name="Light" type="OmniLight3D" parent="."]
+light_color = Color(1, 0.6, 0.2, 1)
+light_energy = 3.0
+light_size = 2.0
+omni_range = 15.0

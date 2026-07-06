@@ -247,7 +247,7 @@ func mark_area_cleared(area_size: float) -> void:
 func overlaps_circle(center: Vector3, radius: float) -> bool:
 	for child in get_children():
 		if child is CollisionShape3D:
-			var shape_center := global_position + child.position
+			var shape_center: Vector3 = global_position + child.position
 			var shape: Shape3D = child.shape
 
 			if shape is BoxShape3D:

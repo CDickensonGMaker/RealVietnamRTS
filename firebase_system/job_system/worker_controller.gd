@@ -253,29 +253,22 @@ func _process_moving(delta: float) -> void:
 
 	# Use worker's move_to() method if available (Squad integration)
 	if worker.has_method("move_to"):
-		# Check if worker is stuck (has move order but velocity is zero)
-		var is_stuck: bool = false
-		if "velocity" in worker and "has_move_order" in worker:
-			if worker.has_move_order:
-				var vel: Vector3 = worker.velocity
-				vel.y = 0
-				if vel.length() < 0.1:
-					is_stuck = true
-
-		# Re-issue move command if not moving or stuck
+		# Only re-issue move command if worker doesn't have one or target changed significantly.
+		# NOTE: We removed the velocity-based is_stuck check here because it was triggering
+		# every frame (velocity starts at 0, physics hasn't kicked in yet), causing move_to()
+		# to be called every frame. The position-based stuck timer above handles genuine stuck.
 		var needs_move_order: bool = true
 		if "move_target" in worker and "has_move_order" in worker:
-			if worker.has_move_order and not is_stuck:
+			if worker.has_move_order:
 				var target_diff: Vector3 = move_target - worker.move_target
 				target_diff.y = 0
 				if target_diff.length() < 2.0:
 					needs_move_order = false  # Already heading to right place
 
 		if needs_move_order:
-			# Squad movement already applies separation steering; sending an extra
-			# nudged target here double-applied it and pushed workers off their goal.
 			worker.move_to(move_target)
-			print("[WorkerController] %s moving to job at %s (dist: %.1f)" % [worker.name, move_target, distance])
+			# Throttle debug output to avoid console spam
+			PrintThrottleClass.log("worker_move", "[WorkerController] %s moving to job at %s (dist: %.1f)" % [worker.name, move_target, distance])
 	else:
 		# Fallback: direct movement for non-Squad workers
 		direction = direction.normalized()
@@ -290,8 +283,8 @@ func _process_moving(delta: float) -> void:
 		# Snap to terrain
 		_snap_to_terrain()
 
-		# Face movement direction
-		if direction.length_squared() > 0.01:
+		# Face movement direction (must be in tree for look_at)
+		if direction.length_squared() > 0.01 and worker.is_inside_tree():
 			worker.look_at(worker.global_position + direction, Vector3.UP)
 
 
@@ -558,14 +551,24 @@ func _find_work() -> void:
 		# Debug disabled - causes console spam
 		#print("[WorkerController] %s found job #%d (type %d)" % [worker.name, best_job.job_id, best_job.job_type])
 		_claim_job(best_job)
-	# Debug disabled - causes console spam (no-job-found logging)
-	#else:
-	#	var all_jobs = _job_system.get_all_jobs()
-	#	var ready_jobs = _job_system.get_jobs_needing_workers(worker_class)
-	#	if all_jobs.size() > 0 or ready_jobs.size() > 0:
-	#		print("[WorkerController] %s (%s): %d total jobs, %d need workers, none selected" % [
-	#			worker.name, worker_class, all_jobs.size(), ready_jobs.size()
-	#		])
+	else:
+		# TEMPORARY DEBUG: Understand why bulldozer stays idle
+		var all_jobs: Array = _job_system.get_all_jobs() if _job_system.has_method("get_all_jobs") else []
+		var ready_jobs: Array = _job_system.get_jobs_needing_workers(worker_class)
+		# Only print once every ~5 seconds to avoid spam
+		if Engine.get_frames_drawn() % 300 == 0:
+			print("[WorkerController] %s (%s) IDLE: %d total jobs, %d ready for %s (search_radius=%.0f)" % [
+				worker.name, worker_class, all_jobs.size(), ready_jobs.size(), worker_class, search_radius
+			])
+			# Print details of the first few jobs
+			for i in range(mini(3, all_jobs.size())):
+				var job: UnifiedJobClass = all_jobs[i]
+				if is_instance_valid(job):
+					print("  Job #%d: type=%d, state=%d, workers=%d/%d, can_work=%s" % [
+						job.job_id, job.job_type, job.state,
+						job.assigned_workers.size(), job.max_workers,
+						str(job.can_be_worked())
+					])
 
 
 func _score_job(job: UnifiedJobClass) -> float:
@@ -1212,10 +1215,17 @@ const SEPARATION_RADIUS := 2.0  # Avoid workers within 2m
 const SEPARATION_WEIGHT := 0.5  # How strongly to steer away
 
 func _calculate_separation() -> Vector3:
-	"""Calculate steering force to avoid nearby workers"""
+	"""Calculate steering force to avoid nearby workers using SpatialHashGrid"""
 	var separation := Vector3.ZERO
 
-	for other in get_tree().get_nodes_in_group("workers"):
+	# Use SpatialHashGrid for O(1) neighbor lookup instead of O(n) group iteration
+	var grid := get_node_or_null("/root/SpatialHashGrid")
+	if not grid:
+		return separation
+
+	var nearby: Array[Node3D] = grid.get_units_in_radius(worker.global_position, SEPARATION_RADIUS * 2.0)
+
+	for other in nearby:
 		if other == worker:
 			continue
 		if not is_instance_valid(other):

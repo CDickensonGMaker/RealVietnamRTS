@@ -265,6 +265,10 @@ func _finish_drag_select(end_pos: Vector2) -> void:
 
 	var box: Rect2 = Rect2(drag_start, end_pos - drag_start).abs()
 	for unit in get_tree().get_nodes_in_group("player_units"):
+		if not is_instance_valid(unit):
+			continue
+		if not unit is Node3D:
+			continue
 		if _unit_in_screen_rect(unit, box):
 			_add_to_selection(unit)
 
@@ -284,6 +288,10 @@ func _update_selection_preview() -> void:
 	# Find units in box
 	var preview_units: Array[Node3D] = []
 	for unit in get_tree().get_nodes_in_group("player_units"):
+		if not is_instance_valid(unit):
+			continue
+		if not unit is Node3D:
+			continue
 		if _unit_in_screen_rect(unit, box):
 			preview_units.append(unit as Node3D)
 
@@ -304,17 +312,19 @@ func _remove_from_selection(unit: Node3D) -> void:
 	var idx: int = selected_units.find(unit)
 	if idx >= 0:
 		selected_units.remove_at(idx)
-		if unit.has_method("set_selected_visual"):
-			unit.set_selected_visual(false)
-		BattleSignals.unit_deselected.emit(unit)
+		if is_instance_valid(unit):
+			if unit.has_method("set_selected_visual"):
+				unit.set_selected_visual(false)
+			BattleSignals.unit_deselected.emit(unit)
 		BattleSignals.selection_changed.emit(selected_units)
 
 
 func clear_selection() -> void:
 	for u in selected_units:
-		if is_instance_valid(u) and u.has_method("set_selected_visual"):
-			u.set_selected_visual(false)
-		BattleSignals.unit_deselected.emit(u)
+		if is_instance_valid(u):
+			if u.has_method("set_selected_visual"):
+				u.set_selected_visual(false)
+			BattleSignals.unit_deselected.emit(u)
 	selected_units.clear()
 	BattleSignals.selection_changed.emit([])
 

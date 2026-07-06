@@ -348,22 +348,15 @@ func _finish_reloading() -> void:
 		_reload_tween.tween_callback(_start_reloading).set_delay(5.0)
 
 
-## Find the nearest firebase within range
+## Find the nearest firebase within range using EntityCache
 func _find_nearest_firebase() -> Node3D:
 	const SUPPLY_RADIUS: float = 150.0
-	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
-	var nearest: Node3D = null
-	var nearest_dist: float = SUPPLY_RADIUS
-
-	for fb in firebases:
-		if not is_instance_valid(fb) or not fb is Node3D:
-			continue
-		var dist: float = global_position.distance_to(fb.global_position)
-		if dist < nearest_dist:
-			nearest = fb as Node3D
-			nearest_dist = dist
-
-	return nearest
+	var nearest_fb: Node = EntityCache.get_nearest_firebase(global_position)
+	if nearest_fb and is_instance_valid(nearest_fb):
+		var dist: float = global_position.distance_to(nearest_fb.global_position)
+		if dist <= SUPPLY_RADIUS:
+			return nearest_fb as Node3D
+	return null
 
 
 ## Start suppression recovery timer

@@ -317,6 +317,12 @@ func _ready() -> void:
 	BattleSignals.unit_spawned.emit(self, data.faction if data else 0)
 
 
+func _exit_tree() -> void:
+	# Disconnect from global signals to prevent memory leaks
+	if BattleSignals.nearby_squad_destroyed.is_connected(_on_nearby_squad_destroyed):
+		BattleSignals.nearby_squad_destroyed.disconnect(_on_nearby_squad_destroyed)
+
+
 func _physics_process(delta: float) -> void:
 	if state == State.DEAD:
 		return
@@ -571,31 +577,16 @@ func _scan_for_attack_move_targets() -> void:
 	if data and "engagement_range" in data:
 		weapon_range = data.engagement_range
 
-	# Query enemies in range
-	var enemies: Array[Node] = []
-	if is_in_group("player_units"):
-		enemies = get_tree().get_nodes_in_group("enemy_units")
-	else:
-		enemies = get_tree().get_nodes_in_group("player_units")
+	# Use SpatialHashGrid for O(1) spatial lookup instead of O(n) scene walk
+	var my_faction: int = data.faction if data else GameEnums.Faction.US_ARMY
+	var nearest: Node3D = SpatialHashGrid.get_nearest_enemy(global_position, my_faction, weapon_range)
 
-	var best_target: Node3D = null
-	var best_dist: float = weapon_range
-
-	for enemy in enemies:
-		if not is_instance_valid(enemy) or not enemy is Node3D:
-			continue
-		var dist: float = global_position.distance_to(enemy.global_position)
-		if dist < best_dist:
-			# Check if enemy is alive
-			if enemy.has_method("get") and enemy.get("state") != null:
-				if enemy.state == State.DEAD:
-					continue
-			best_dist = dist
-			best_target = enemy as Node3D
-
-	# If found enemy in range, attack it (but continue to move_target after)
-	if best_target:
-		attack(best_target)
+	# Check if enemy is alive before engaging
+	if nearest and is_instance_valid(nearest):
+		if nearest.has_method("get") and nearest.get("state") != null:
+			if nearest.state == State.DEAD:
+				return
+		attack(nearest)
 
 
 ## Scan for enemies when idle - auto-engage nearby threats
@@ -617,38 +608,16 @@ func _scan_for_auto_engage_targets() -> void:
 	if data:
 		weapon_range = data.attack_range if data.attack_range > 0 else 300.0
 
-	# Query enemies using SpatialHashGrid if available
-	var enemies: Array = []
-	var grid: Node = get_node_or_null("/root/SpatialHashGrid")
-	if grid and grid.has_method("get_enemies_in_radius"):
-		var my_faction: int = data.faction if data else GameEnums.Faction.US_ARMY
-		enemies = grid.get_enemies_in_radius(global_position, weapon_range, my_faction)
-	else:
-		# Fallback: use group queries
-		if is_in_group("player_units"):
-			enemies = get_tree().get_nodes_in_group("enemy_units")
-		else:
-			enemies = get_tree().get_nodes_in_group("player_units")
+	# Use SpatialHashGrid for O(1) spatial lookup instead of O(n) scene walk
+	var my_faction: int = data.faction if data else GameEnums.Faction.US_ARMY
+	var nearest: Node3D = SpatialHashGrid.get_nearest_enemy(global_position, my_faction, weapon_range)
 
-	var best_target: Node3D = null
-	var best_dist: float = weapon_range
-
-	for enemy in enemies:
-		if not is_instance_valid(enemy) or not enemy is Node3D:
-			continue
-		var dist: float = global_position.distance_to(enemy.global_position)
-		if dist < best_dist:
-			# Check if enemy is alive
-			if enemy.has_method("get") and enemy.get("state") != null:
-				var enemy_state: int = enemy.get("state")
-				if enemy_state == State.DEAD:
-					continue
-			best_dist = dist
-			best_target = enemy as Node3D
-
-	# If found enemy in range, engage!
-	if best_target:
-		attack(best_target)
+	# Check if enemy is alive before engaging
+	if nearest and is_instance_valid(nearest):
+		if nearest.has_method("get") and nearest.get("state") != null:
+			if nearest.state == State.DEAD:
+				return
+		attack(nearest)
 
 
 ## Apply damage to this squad
@@ -1930,41 +1899,10 @@ func _cancel_resupply() -> void:
 
 ## Find the nearest operational SupplyDepot
 func _find_nearest_supply_depot() -> Node3D:
-	var depots: Array[Node] = get_tree().get_nodes_in_group("supply_depots")
-	var nearest: Node3D = null
-	var nearest_dist: float = INF
-
-	for depot in depots:
-		if not is_instance_valid(depot) or not depot is Node3D:
-			continue
-
-		# Check if depot is operational
-		if depot.has_method("is_destroyed") and depot.is_destroyed():
-			continue
-
-		# Check faction compatibility (only resupply at friendly depots)
-		var depot_faction: int = -1
-		if "faction" in depot:
-			depot_faction = depot.faction
-		if depot_faction >= 0 and data:
-			# Check if same faction or allied
-			var my_faction: int = data.faction
-			if depot_faction != my_faction:
-				# TODO: Check alliance status if implemented
-				continue
-
-		# Check if depot has supply available
-		if depot.has_method("get_available_supply"):
-			var available: float = depot.get_available_supply()
-			if available <= 0.0:
-				continue
-
-		var dist: float = global_position.distance_to((depot as Node3D).global_position)
-		if dist < nearest_dist:
-			nearest = depot as Node3D
-			nearest_dist = dist
-
-	return nearest
+	# Use EntityCache for O(1) cached lookup instead of O(n) scene walk
+	var my_faction: int = data.faction if data else GameEnums.Faction.US_ARMY
+	var depot: Node = EntityCache.get_nearest_supply_depot(global_position, my_faction)
+	return depot as Node3D if depot else null
 
 
 ## SupplyDepot interface: Check if unit needs resupply
@@ -2076,37 +2014,17 @@ func reload() -> bool:
 ## Find the nearest ACTIVE firebase within its influence radius
 ## PRD Phase 4: Firebase must have HQ building to provide supply/morale
 func _find_nearest_firebase() -> Node3D:
-	var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
-	var nearest: Node3D = null
-	var nearest_dist: float = INF
-
-	for fb in firebases:
-		if not is_instance_valid(fb) or not fb is Node3D:
-			continue
-
+	# Use EntityCache for O(1) cached lookup instead of O(n) scene walk
+	# First check if we're within any firebase's influence
+	var fb: Node = EntityCache.get_firebase_for_position(global_position)
+	if fb and is_instance_valid(fb):
 		# Check if firebase is active (has HQ building)
 		var is_active: bool = true
 		if fb.has_method("is_active"):
 			is_active = fb.is_active()
-		if not is_active:
-			continue
-
-		# Check if within firebase influence radius
-		var in_influence: bool = false
-		if fb.has_method("is_position_in_influence"):
-			in_influence = fb.is_position_in_influence(global_position)
-		else:
-			# Fallback: use distance check
-			var dist: float = global_position.distance_to(fb.global_position)
-			in_influence = dist <= 150.0
-
-		if in_influence:
-			var dist: float = global_position.distance_to(fb.global_position)
-			if dist < nearest_dist:
-				nearest = fb as Node3D
-				nearest_dist = dist
-
-	return nearest
+		if is_active:
+			return fb as Node3D
+	return null
 
 
 # =============================================================================

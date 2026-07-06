@@ -300,11 +300,14 @@ func _detonate_charge() -> void:
 
 
 func _apply_explosion_damage(position: Vector3) -> void:
-	"""Apply area damage from explosion"""
+	"""Apply area damage from explosion using SpatialHashGrid for efficiency"""
 	var radius: float = 10.0
-	var units: Array[Node] = get_tree().get_nodes_in_group("player_units")
+	# Sappers are VC/NVA - use get_enemies_in_radius to find player units
+	var units: Array[Node3D] = SpatialHashGrid.get_enemies_in_radius(
+		position, GameEnums.Faction.VC, radius
+	)
 
-	for unit in units:
+	for unit: Node3D in units:
 		if not is_instance_valid(unit):
 			continue
 
@@ -336,10 +339,16 @@ func _get_nearby_targets(radius: float) -> Array[Node]:
 
 
 func _check_detection() -> void:
-	"""Check if sappers are detected by player units"""
-	var player_units: Array[Node] = get_tree().get_nodes_in_group("player_units")
+	"""Check if sappers are detected by player units using SpatialHashGrid"""
+	# Max detection range considering watchtower bonus
+	var max_detection_range: float = 15.0 * 2.0  # Base * watchtower multiplier
 
-	for unit in player_units:
+	# Use SpatialHashGrid for efficient enemy lookup - sappers are VC faction
+	var player_units: Array[Node3D] = SpatialHashGrid.get_enemies_in_radius(
+		global_position, GameEnums.Faction.VC, max_detection_range
+	)
+
+	for unit: Node3D in player_units:
 		if not is_instance_valid(unit):
 			continue
 

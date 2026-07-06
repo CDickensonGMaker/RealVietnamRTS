@@ -21,7 +21,10 @@ enum State {
 	IDLE,           # No placement active
 	SINGLE_PLACING, # Single building follows cursor
 	LINEAR_START,   # Waiting for first click (linear placement)
-	LINEAR_DRAGGING # Dragging to extend line
+	LINEAR_DRAGGING, # Dragging to extend line
+	ROAD_START,     # Waiting for road start click
+	ROAD_DRAWING,   # Dragging to draw road path
+	ROAD_CONFIRM,   # Showing road preview, waiting for confirm/cancel
 }
 
 ## Signals
@@ -31,6 +34,9 @@ signal placement_cancelled()
 signal placement_failed(building_type: int, reason: String)
 signal linear_segment_committed(building_type: int, positions: Array)
 signal validation_changed(valid: bool, message: String)
+signal road_placement_started()
+signal road_committed(path_points: PackedVector3Array, cost: float)
+signal road_preview_updated(length: float, cost: float)
 
 ## Current state
 var state: State = State.IDLE
@@ -55,6 +61,16 @@ var _bridge_span_end: Vector3 = Vector3.ZERO
 var _arc_facing: float = 0.0  # Current facing direction in degrees (0 = north/+Z)
 var _arc_anchored: bool = false  # True after right-click anchors position for rotation
 var _arc_anchor_pos: Vector3 = Vector3.ZERO  # World position where building is anchored
+
+## Road placement
+var _road_waypoints: Array[Vector3] = []  # Raw waypoints from drag
+var _road_smoothed_path: PackedVector3Array = PackedVector3Array()  # Smoothed path
+var _road_preview_mesh: MeshInstance3D = null  # Visual preview of road
+var _road_length: float = 0.0  # Total road length in meters
+var _road_cost: float = 0.0  # Supply cost for road
+const ROAD_COST_PER_METER := 0.5  # Supply cost per meter of road
+const ROAD_MIN_WAYPOINT_DISTANCE := 5.0  # Minimum distance between waypoints while dragging
+const ROAD_WIDTH := 4.0  # Road width for preview and construction
 
 ## Activation frame tracking (prevents menu click from immediately committing)
 var _activation_frame: int = -1
@@ -89,6 +105,15 @@ func _process(_delta: float) -> void:
 				_update_linear_start()
 			State.LINEAR_DRAGGING:
 				_update_linear_dragging()
+
+	# Road placement updates
+	match state:
+		State.ROAD_START:
+			_update_road_start()
+		State.ROAD_DRAWING:
+			_update_road_drawing()
+		State.ROAD_CONFIRM:
+			pass  # Preview is static, waiting for input
 
 
 ## =============================================================================
@@ -156,6 +181,26 @@ func start_placement(building_type: int, initial_cursor_pos: Vector3 = Vector3.I
 	placement_started.emit(building_type)
 
 
+func start_road_placement() -> void:
+	"""Begin road drawing mode. Player clicks and drags to define road path."""
+	# Cancel any existing placement
+	if state != State.IDLE:
+		cancel_placement()
+
+	# Clear road state
+	_road_waypoints.clear()
+	_road_smoothed_path.clear()
+	_road_length = 0.0
+	_road_cost = 0.0
+
+	# Track activation frame
+	_activation_frame = Engine.get_process_frames()
+
+	state = State.ROAD_START
+	road_placement_started.emit()
+	print("[PlacementController] Road placement started - click and drag to draw")
+
+
 func cancel_placement() -> void:
 	"""Cancel current placement"""
 	if state == State.IDLE:
@@ -176,6 +221,10 @@ func handle_input(event: InputEvent, world_pos: Vector3) -> bool:
 	"""Handle input events during placement. Returns true if event was consumed."""
 	if state == State.IDLE:
 		return false
+
+	# Road placement has its own input handler
+	if state in [State.ROAD_START, State.ROAD_DRAWING, State.ROAD_CONFIRM]:
+		return handle_road_input(event, world_pos)
 
 	# Always consume input during active placement to prevent propagation
 	# This prevents clicks from clearing selection or triggering other systems
@@ -865,6 +914,12 @@ func _reset_state() -> void:
 	_arc_anchored = false
 	_arc_anchor_pos = Vector3.ZERO
 	_last_validation_result = {"valid": true, "error": 0, "message": ""}
+	# Road state
+	_road_waypoints.clear()
+	_road_smoothed_path.clear()
+	_road_length = 0.0
+	_road_cost = 0.0
+	_destroy_road_preview()
 
 
 ## =============================================================================
@@ -915,3 +970,265 @@ func _hide_firebase_influence_zones() -> void:
 	for fb in firebases:
 		if fb.has_method("hide_influence_zone"):
 			fb.hide_influence_zone()
+
+
+## =============================================================================
+## ROAD PLACEMENT
+## =============================================================================
+
+func _update_road_start() -> void:
+	"""Update road start mode - waiting for first click"""
+	# Could show a "click to start" cursor indicator here
+	pass
+
+
+func _update_road_drawing() -> void:
+	"""Update road drawing - add waypoints while dragging"""
+	if _cursor_world_pos == Vector3.ZERO:
+		return
+
+	# Add waypoint if far enough from last point
+	if _road_waypoints.is_empty():
+		_road_waypoints.append(_cursor_world_pos)
+		_update_road_preview()
+	else:
+		var last_point: Vector3 = _road_waypoints[_road_waypoints.size() - 1]
+		var dist: float = last_point.distance_to(_cursor_world_pos)
+		if dist >= ROAD_MIN_WAYPOINT_DISTANCE:
+			_road_waypoints.append(_cursor_world_pos)
+			_update_road_preview()
+
+
+func _start_road_drawing(start_pos: Vector3) -> void:
+	"""Begin collecting road waypoints"""
+	_road_waypoints.clear()
+	_road_waypoints.append(start_pos)
+	state = State.ROAD_DRAWING
+	_create_road_preview()
+	print("[PlacementController] Road drawing started at %s" % start_pos)
+
+
+func _finish_road_drawing() -> void:
+	"""Finish drawing and show confirmation preview"""
+	if _road_waypoints.size() < 2:
+		print("[PlacementController] Road too short - need at least 2 points")
+		cancel_placement()
+		return
+
+	# Smooth the path
+	_smooth_road_path()
+
+	# Calculate cost
+	_calculate_road_cost()
+
+	# Update preview with final smoothed path
+	_update_road_preview()
+
+	state = State.ROAD_CONFIRM
+	road_preview_updated.emit(_road_length, _road_cost)
+	print("[PlacementController] Road preview: %.1fm, cost: %.0f supply (click to confirm, right-click to cancel)" % [_road_length, _road_cost])
+
+
+func _smooth_road_path() -> void:
+	"""Smooth sharp corners in the road path using Catmull-Rom interpolation"""
+	if _road_waypoints.size() < 2:
+		_road_smoothed_path.clear()
+		return
+
+	# For now, simple corner smoothing - add intermediate points at sharp turns
+	_road_smoothed_path.clear()
+	_road_smoothed_path.append(_road_waypoints[0])
+
+	for i in range(1, _road_waypoints.size() - 1):
+		var prev: Vector3 = _road_waypoints[i - 1]
+		var curr: Vector3 = _road_waypoints[i]
+		var next: Vector3 = _road_waypoints[i + 1]
+
+		# Calculate angle at this point
+		var dir_in: Vector3 = (curr - prev).normalized()
+		var dir_out: Vector3 = (next - curr).normalized()
+		var dot: float = dir_in.dot(dir_out)
+
+		# If sharp turn (> ~30 degrees), add smoothing points
+		if dot < 0.85:  # cos(30°) ≈ 0.866
+			# Add a bezier-like curve through this corner
+			var t1: Vector3 = curr - dir_in * 3.0
+			var t2: Vector3 = curr + dir_out * 3.0
+			_road_smoothed_path.append(t1)
+			_road_smoothed_path.append(curr)
+			_road_smoothed_path.append(t2)
+		else:
+			_road_smoothed_path.append(curr)
+
+	_road_smoothed_path.append(_road_waypoints[_road_waypoints.size() - 1])
+
+	# Snap all points to terrain
+	if _terrain and _terrain.has_method("get_height_at"):
+		for i in range(_road_smoothed_path.size()):
+			var pos: Vector3 = _road_smoothed_path[i]
+			pos.y = _terrain.get_height_at(pos)
+			_road_smoothed_path[i] = pos
+
+
+func _calculate_road_cost() -> void:
+	"""Calculate total road length and supply cost"""
+	_road_length = 0.0
+	var path: PackedVector3Array = _road_smoothed_path if not _road_smoothed_path.is_empty() else PackedVector3Array(_road_waypoints)
+
+	for i in range(path.size() - 1):
+		_road_length += path[i].distance_to(path[i + 1])
+
+	_road_cost = _road_length * ROAD_COST_PER_METER
+
+
+func _create_road_preview() -> void:
+	"""Create visual preview mesh for the road"""
+	if not is_instance_valid(_road_preview_mesh):
+		_road_preview_mesh = MeshInstance3D.new()
+		_road_preview_mesh.name = "RoadPreview"
+		add_child(_road_preview_mesh)
+
+		# Preview material
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.6, 0.5, 0.3, 0.6)  # Semi-transparent brown
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_road_preview_mesh.material_override = mat
+
+
+func _update_road_preview() -> void:
+	"""Update the road preview mesh geometry"""
+	if not is_instance_valid(_road_preview_mesh):
+		_create_road_preview()
+
+	# Use smoothed path if available, otherwise raw waypoints
+	var path: PackedVector3Array
+	if state == State.ROAD_CONFIRM and not _road_smoothed_path.is_empty():
+		path = _road_smoothed_path
+	else:
+		path = PackedVector3Array(_road_waypoints)
+
+	if path.size() < 2:
+		_road_preview_mesh.mesh = null
+		return
+
+	# Calculate length for display
+	_calculate_road_cost()
+	road_preview_updated.emit(_road_length, _road_cost)
+
+	# Build road strip mesh
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var half_width: float = ROAD_WIDTH * 0.5
+
+	for i in range(path.size() - 1):
+		var p1: Vector3 = path[i]
+		var p2: Vector3 = path[i + 1]
+
+		# Direction and perpendicular
+		var dir: Vector3 = (p2 - p1).normalized()
+		var perp: Vector3 = Vector3(-dir.z, 0, dir.x) * half_width
+
+		# Raise slightly above terrain
+		var offset_y: float = 0.15
+
+		# Quad vertices
+		var v1: Vector3 = p1 + perp + Vector3(0, offset_y, 0)
+		var v2: Vector3 = p1 - perp + Vector3(0, offset_y, 0)
+		var v3: Vector3 = p2 + perp + Vector3(0, offset_y, 0)
+		var v4: Vector3 = p2 - perp + Vector3(0, offset_y, 0)
+
+		# Triangle 1
+		st.add_vertex(v1)
+		st.add_vertex(v2)
+		st.add_vertex(v3)
+
+		# Triangle 2
+		st.add_vertex(v2)
+		st.add_vertex(v4)
+		st.add_vertex(v3)
+
+	_road_preview_mesh.mesh = st.commit()
+
+
+func _destroy_road_preview() -> void:
+	"""Clean up road preview mesh"""
+	if is_instance_valid(_road_preview_mesh):
+		_road_preview_mesh.queue_free()
+		_road_preview_mesh = null
+
+
+func _commit_road() -> void:
+	"""Create the BUILD_ROAD job via JobSystem"""
+	if not _job_system:
+		push_error("[PlacementController] JobSystem not found - cannot create road job")
+		cancel_placement()
+		return
+
+	# Use smoothed path for the job
+	var path: PackedVector3Array = _road_smoothed_path if not _road_smoothed_path.is_empty() else PackedVector3Array(_road_waypoints)
+
+	if path.size() < 2:
+		push_error("[PlacementController] Road path too short")
+		cancel_placement()
+		return
+
+	# Check if player has enough supply (would need firebase reference)
+	# For now, just create the job - supply deduction handled by JobSystem
+
+	# Create the road job
+	var job = _job_system.create_road_job(path, ROAD_WIDTH)
+	if job:
+		road_committed.emit(path, _road_cost)
+		print("[PlacementController] Road job created: %.1fm, cost: %.0f" % [_road_length, _road_cost])
+	else:
+		placement_failed.emit(-1, "Failed to create road job")
+
+	# Clean up
+	cancel_placement()
+
+
+func handle_road_input(event: InputEvent, world_pos: Vector3) -> bool:
+	"""Handle input for road placement states. Returns true if consumed."""
+	if state != State.ROAD_START and state != State.ROAD_DRAWING and state != State.ROAD_CONFIRM:
+		return false
+
+	_cursor_world_pos = world_pos
+
+	if event is InputEventMouseButton:
+		var mouse: InputEventMouseButton = event
+
+		match state:
+			State.ROAD_START:
+				# Left-click starts drawing
+				if mouse.button_index == MOUSE_BUTTON_LEFT and mouse.pressed:
+					_start_road_drawing(world_pos)
+					return true
+				# Right-click cancels
+				if mouse.button_index == MOUSE_BUTTON_RIGHT and mouse.pressed:
+					cancel_placement()
+					return true
+
+			State.ROAD_DRAWING:
+				# Left-click release finishes drawing
+				if mouse.button_index == MOUSE_BUTTON_LEFT and not mouse.pressed:
+					_finish_road_drawing()
+					return true
+				# Right-click cancels
+				if mouse.button_index == MOUSE_BUTTON_RIGHT and mouse.pressed:
+					cancel_placement()
+					return true
+
+			State.ROAD_CONFIRM:
+				# Left-click confirms
+				if mouse.button_index == MOUSE_BUTTON_LEFT and mouse.pressed:
+					_commit_road()
+					return true
+				# Right-click cancels
+				if mouse.button_index == MOUSE_BUTTON_RIGHT and mouse.pressed:
+					cancel_placement()
+					return true
+
+	return true  # Consume all input during road placement

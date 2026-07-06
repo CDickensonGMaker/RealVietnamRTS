@@ -498,8 +498,15 @@ func _handle_hq_building_completion(hq_building: Node3D, building_data: Building
 	print("[ConstructionManager] HQ building completed at %v - activating firebase" % world_position)
 
 	# Check if there's already a firebase at this location
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
 	var existing_firebase: Node = null
-	for fb in get_tree().get_nodes_in_group("firebases"):
+	var firebases: Array[Node] = []
+	if entity_cache:
+		firebases = entity_cache.get_firebases()
+	else:
+		firebases = get_tree().get_nodes_in_group("firebases")
+	for fb in firebases:
 		if not is_instance_valid(fb):
 			continue
 		var dist: float = fb.global_position.distance_to(world_position)
@@ -545,10 +552,16 @@ func _get_firebase_phonetic_name() -> String:
 		"Sierra", "Tango", "Uniform", "Victor", "Whiskey", "X-Ray",
 		"Yankee", "Zulu"
 	]
-	var index: int = get_tree().get_nodes_in_group("firebases").size()
-	if index < names.size():
-		return names[index]
-	return "Firebase" + str(index)
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
+	var firebase_count: int = 0
+	if entity_cache:
+		firebase_count = entity_cache.get_firebases().size()
+	else:
+		firebase_count = get_tree().get_nodes_in_group("firebases").size()
+	if firebase_count < names.size():
+		return names[firebase_count]
+	return "Firebase" + str(firebase_count)
 
 
 func _create_placeholder_building(data: BuildingData, building_type: int) -> Node3D:
@@ -666,6 +679,7 @@ func _find_idle_engineers(position: Vector3) -> Array[Node3D]:
 func _find_idle_engineers_fallback(position: Vector3) -> Array[Node3D]:
 	"""Fallback method when SpatialHashGrid not available"""
 	var result: Array[Node3D] = []
+	# Note: player_units is not cached by EntityCache (dynamic combat units)
 	var engineers: Array[Node] = get_tree().get_nodes_in_group("player_units")
 
 	for unit in engineers:
@@ -749,8 +763,13 @@ func register_scene_placed_hq_buildings() -> int:
 
 	# Find all nodes that might be HQ buildings (TOC, Command Post, etc.)
 	# Check by name pattern or group membership
+	# Use EntityCache for efficient cached lookups
+	var entity_cache: Node = get_node_or_null("/root/EntityCache")
 	var potential_hqs: Array[Node] = []
-	potential_hqs.append_array(get_tree().get_nodes_in_group("hq_buildings"))
+	if entity_cache:
+		potential_hqs.append_array(entity_cache.get_hq_buildings())
+	else:
+		potential_hqs.append_array(get_tree().get_nodes_in_group("hq_buildings"))
 
 	# Also search for nodes named "TOC" or containing "TOC"
 	for node in get_tree().current_scene.get_children():
@@ -770,8 +789,14 @@ func register_scene_placed_hq_buildings() -> int:
 			continue
 
 		# Check if already within an active firebase
+		# Use EntityCache for efficient cached lookups (reuse from above)
+		var firebases_for_check: Array[Node] = []
+		if entity_cache:
+			firebases_for_check = entity_cache.get_firebases()
+		else:
+			firebases_for_check = get_tree().get_nodes_in_group("firebases")
 		var already_registered: bool = false
-		for fb in get_tree().get_nodes_in_group("firebases"):
+		for fb in firebases_for_check:
 			if fb.has_method("is_active") and fb.is_active():
 				if fb.global_position.distance_to(hq.global_position) < 20.0:
 					already_registered = true
