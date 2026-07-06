@@ -159,3 +159,10 @@ Honorable mention (UX polish, cheap): failed placement cancels the whole placeme
 7. **WS-7: Feedback dead-code sweep** — Delete orphaned `health_bar_manager.gd` / `floating_health_bar.gd` (superseded by FloatingLabelManager), `fortification_system/machine_gun_nest.gd` after WS-1 harvests anything useful. Prevents future "random systems" regressions.
 
 *Sequencing: WS-1 → WS-2/WS-3 in parallel → WS-4/WS-5/WS-6 independent → WS-7 last. WS-1 through WS-4 are the decree-critical set.*
+
+---
+## Arbiter Correction (post-verification)
+Control groups verdict was WRONG: selection_manager.gd:140-167 already implements
+Ctrl+0-9 save / 0-9 recall / Shift+0-9 add / Ctrl+G next-group / Space focus.
+rts_controller.gd is a pure orphaned duplicate (D1 sweep). Bead 1z5 rescoped to
+stances + Hold only.
