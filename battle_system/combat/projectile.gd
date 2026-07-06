@@ -27,6 +27,10 @@ var gravity: float = 9.8
 var lifetime: float = 2.0
 var elapsed_time: float = 0.0
 
+## Above this speed a forward raycast is used for terrain tunnel-prevention
+## (fast rounds can cross a ridge between frames that a point height-check misses).
+@export var forward_ray_speed_threshold: float = 100.0
+
 ## Rocket motor properties
 var rocket_thrust: float = 40.0          # Acceleration while motor burns (m/s²)
 var rocket_burn_time: float = 1.2        # How long the motor burns (seconds)
@@ -92,8 +96,12 @@ var _mesh: MeshInstance3D = null
 var _trail: GPUParticles3D = null
 var _area: Area3D = null
 
+## Cached TerrainIntegration ref (avoids per-frame string-path lookups + raycasts)
+var _terrain: Node = null
+
 
 func _ready() -> void:
+	_terrain = get_node_or_null("/root/TerrainIntegration")
 	_setup_visuals()
 	_setup_collision()
 	set_physics_process(false)
@@ -345,44 +353,43 @@ func _process_napalm_trajectory(delta: float) -> void:
 	rotation.z += delta * tumble * 0.8
 
 
-## Check for terrain collision using raycast instead of hardcoded Y=0.
-## This properly handles hills, valleys, and uneven terrain.
+## Check for terrain collision via heightmap compare instead of a per-frame
+## downward raycast. Properly handles hills/valleys and is far cheaper at volume.
 func _check_terrain_collision() -> void:
-	var space := get_world_3d().direct_space_state
-	if not space:
-		# Fallback to simple Y check
+	# Primary check: sample terrain height at our XZ and compare to our Y.
+	var terrain_h: float = 0.0
+	var have_terrain: bool = false
+	if _terrain and _terrain.has_method("get_height_at"):
+		if not _terrain.has_method("is_terrain_ready") or _terrain.is_terrain_ready():
+			terrain_h = _terrain.get_height_at(global_position)
+			have_terrain = true
+
+	if not have_terrain:
+		# Fallback to simple ground plane before terrain height data is ready.
 		if global_position.y <= 0.0:
 			global_position.y = 0.0
 			_on_ground_impact()
 		return
 
-	# Raycast from current position downward
-	var ray_length: float = 2.0  # Check 2m below projectile
-	var from := global_position
-	var to := global_position + Vector3(0, -ray_length, 0)
+	if global_position.y <= terrain_h:
+		global_position.y = terrain_h
+		_on_ground_impact()
+		return
 
-	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 1  # Terrain layer
-	query.collide_with_areas = false
-	query.collide_with_bodies = true
-
-	var result: Dictionary = space.intersect_ray(query)
-	if result:
-		# Hit terrain - check if we're below the surface
-		var terrain_y: float = result.position.y
-		if global_position.y <= terrain_y + 0.1:  # Small buffer
-			global_position = result.position
-			_on_ground_impact()
+	# Tunnel-prevention: only fast rounds need a forward raycast to catch a ridge
+	# crossed between frames (slow rounds can't move far enough to skip the check).
+	if velocity.length() > forward_ray_speed_threshold:
+		var space := get_world_3d().direct_space_state
+		if not space:
 			return
+		var forward_dist: float = velocity.length() * 0.05  # ~50ms lookahead
+		var to := global_position + velocity.normalized() * forward_dist
+		var query := PhysicsRayQueryParameters3D.create(global_position, to)
+		query.collision_mask = 1  # Terrain layer
+		query.collide_with_areas = false
+		query.collide_with_bodies = true
 
-	# Also check forward ray for high-speed projectiles hitting terrain ahead
-	if velocity.length() > 100.0:  # High speed projectiles
-		var forward_dist: float = velocity.length() * 0.05  # 50ms lookahead
-		to = global_position + velocity.normalized() * forward_dist
-		query = PhysicsRayQueryParameters3D.create(from, to)
-		query.collision_mask = 1
-
-		result = space.intersect_ray(query)
+		var result: Dictionary = space.intersect_ray(query)
 		if result:
 			global_position = result.position
 			_on_ground_impact()

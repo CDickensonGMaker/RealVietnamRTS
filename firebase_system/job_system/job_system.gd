@@ -51,6 +51,10 @@ var _update_timer: float = 0.0
 ## DEBUG: Multiplier for work speed (set to 1.0 for normal, 50.0 for 5000% speed)
 const DEBUG_WORK_MULTIPLIER: float = 1.0
 
+## Gate per-event debug prints (e.g. per-job-creation). Keep false in normal
+## play; errors/warnings and one-time init messages are never gated by this.
+const DEBUG := false
+
 ## Container for job-related nodes
 var _node_container: Node3D = null
 
@@ -189,12 +193,13 @@ func create_job(type: UnifiedJobClass.Type, center: Vector3, size: Vector2 = Vec
 
 	_register_job(job)
 
-	print("[JobSystem] Created job #%d: %s at %s (size: %s)" % [
-		job.job_id,
-		UnifiedJobClass.get_type_name(type),
-		center,
-		size
-	])
+	if DEBUG:
+		print("[JobSystem] Created job #%d: %s at %s (size: %s)" % [
+			job.job_id,
+			UnifiedJobClass.get_type_name(type),
+			center,
+			size
+		])
 
 	return job
 
@@ -625,6 +630,10 @@ func get_best_job_for_worker(worker: Node3D, worker_class: String, max_distance:
 		return null
 
 	var worker_pos: Vector3 = worker.global_position
+	# Flatten to the XZ plane: a stale/pre-terrain Y (units spawned before the
+	# heightmap loads sit at Y=0, jobs sit on hills) must not inflate distance
+	# and push otherwise-reachable jobs past max_distance / search_radius.
+	var worker_xz := Vector3(worker_pos.x, 0.0, worker_pos.z)
 	var best_job: UnifiedJobClass = null
 	var best_score: float = -INF
 
@@ -634,7 +643,9 @@ func get_best_job_for_worker(worker: Node3D, worker_class: String, max_distance:
 		if capacity_remaining <= 0:
 			continue
 
-		var dist: float = worker_pos.distance_to(job.get_centroid())
+		var job_centroid: Vector3 = job.get_centroid()
+		var job_xz := Vector3(job_centroid.x, 0.0, job_centroid.z)
+		var dist: float = worker_xz.distance_to(job_xz)
 		if dist > max_distance:
 			continue
 

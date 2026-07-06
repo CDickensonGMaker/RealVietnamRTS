@@ -111,11 +111,13 @@ func advance_clearing(zone_id: int, amount: float) -> void:
 	zone.progress += amount
 
 	# Check for stage advancement
+	var stage_changed: bool = false
 	if zone.progress >= 1.0:
 		zone.progress = 0.0
 		if zone.stage < ClearingStage.FORTIFIED:
 			zone.stage = zone.stage + 1 as ClearingStage
 			_apply_stage_changes(zone)
+			stage_changed = true
 
 			if zone.stage == ClearingStage.FORTIFIED:
 				clearing_completed.emit(zone_id)
@@ -123,7 +125,11 @@ func advance_clearing(zone_id: int, amount: float) -> void:
 			zone.progress = 1.0
 
 	clearing_progress.emit(zone_id, _get_total_progress(zone))
-	_update_terrain_grid(zone)
+
+	# A1: Only rewrite TerrainGrid state (and fire cell_updated -> vegetation regen) when a
+	# cell actually changes clearing stage. Writing every tick drove 60Hz MultiMesh rebuilds.
+	if stage_changed:
+		_update_terrain_grid(zone)
 
 
 ## Set zone directly to a stage (for testing)

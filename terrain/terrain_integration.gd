@@ -49,6 +49,15 @@ var _terrain_dirty_regions: Array[Rect2i] = []
 var _terrain_rebuild_pending: bool = false
 const TERRAIN_REBUILD_INTERVAL: float = 0.2  # Rebuild chunks at most 5 times per second
 
+# Vegetation regen debouncing for clearing updates (A1: prevents 60Hz MultiMesh rebuilds).
+# TerrainGrid.cell_updated fires per clearing tick; batching collapses a burst of dirty
+# regions into a single vegetation regen on the same 0.2s deadline.
+var _veg_dirty_regions: Dictionary = {}  # Rect2i -> true (set semantics)
+var _veg_rebuild_pending: bool = false
+
+# Terrain-ready signalling (emit terrain_ready exactly once when height queries are valid)
+var _terrain_ready_emitted: bool = false
+
 
 func _ready() -> void:
 	# Try to get UnifiedTerrainEngine autoload
@@ -203,6 +212,7 @@ func init_terrain(camera: Camera3D, seed_value: int = -1) -> void:
 		print("[TerrainIntegration] UnifiedTerrain initialized with heightmap")
 
 	_is_initialized = true
+	_check_and_emit_terrain_ready()
 	print("[TerrainIntegration] Terrain initialized with camera: %s" % camera.name)
 
 
@@ -247,6 +257,7 @@ func reinit_with_terrain(new_terrain_manager: Node3D, new_map_size: float = -1) 
 
 	# Mark as fully initialized
 	_is_initialized = true
+	_check_and_emit_terrain_ready()
 
 	print("[TerrainIntegration] Reinitialized with %s (%.0fm map)" % [
 		terrain_manager.name, effective_size
@@ -472,6 +483,29 @@ func is_ready() -> bool:
 	return _is_initialized and terrain_manager and terrain_manager.is_ready
 
 
+## Check if terrain height data is ready to answer get_height_at() correctly.
+## True once the underlying heightmap/engine is populated (UnifiedTerrain initialized,
+## or terrain_manager has a heightmap with data). Callers should gate spawn placement
+## on this so units don't sample Y=0 before generation completes.
+func is_terrain_ready() -> bool:
+	if unified_terrain and unified_terrain.has_method("is_ready") and unified_terrain.is_ready():
+		return true
+	if terrain_manager and terrain_manager.heightmap:
+		var hm: Object = terrain_manager.heightmap
+		if "data" in hm and not hm.data.is_empty():
+			return true
+	return false
+
+
+## Emit terrain_ready exactly once, the first time is_terrain_ready() becomes true.
+func _check_and_emit_terrain_ready() -> void:
+	if _terrain_ready_emitted:
+		return
+	if is_terrain_ready():
+		_terrain_ready_emitted = true
+		terrain_ready.emit()
+
+
 ## Force load all terrain chunks (for small maps or loading screens)
 func load_all_chunks() -> void:
 	if terrain_manager:
@@ -586,7 +620,7 @@ func _on_terrain_scarred(_region: Rect2i) -> void:
 
 
 func _on_terrain_ready() -> void:
-	terrain_ready.emit()
+	_check_and_emit_terrain_ready()
 	print("[TerrainIntegration] Terrain generation complete")
 
 
@@ -603,8 +637,29 @@ func _on_chunk_loaded(coord: Vector2i, _is_playable: bool) -> void:
 
 
 func _on_terrain_grid_updated(region: Rect2i) -> void:
-	# TerrainGrid data updated - trigger vegetation update
-	_on_vegetation_updated(region)
+	# A1: TerrainGrid data updated (e.g. jungle clearing advancing). Route through the
+	# existing 0.2s batch instead of re-materializing vegetation MultiMeshes synchronously
+	# every tick (that was the primary clearing freeze). Accumulate as a set of regions.
+	_veg_dirty_regions[region] = true
+	if not _veg_rebuild_pending:
+		_veg_rebuild_pending = true
+		get_tree().create_timer(TERRAIN_REBUILD_INTERVAL).timeout.connect(_flush_vegetation_updates)
+
+
+func _flush_vegetation_updates() -> void:
+	# Process all queued clearing-driven vegetation regens in a single merged batch.
+	_veg_rebuild_pending = false
+	if _veg_dirty_regions.is_empty():
+		return
+
+	var regions: Array = _veg_dirty_regions.keys()
+	_veg_dirty_regions.clear()
+
+	var merged: Rect2i = regions[0]
+	for i in range(1, regions.size()):
+		merged = merged.merge(regions[i])
+
+	_on_vegetation_updated(merged)
 
 
 func _on_unified_terrain_modified(region: Rect2i) -> void:

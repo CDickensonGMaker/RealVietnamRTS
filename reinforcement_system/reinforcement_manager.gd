@@ -10,6 +10,7 @@ signal reinforcement_arrived(units: Array, destination: Node3D)
 signal request_failed(request: ReinforcementRequest, reason: String)
 
 const Squad = preload("res://battle_system/nodes/squad.gd")
+const DeferredSpawnHelperClass = preload("res://battle_system/utils/deferred_spawn_helper.gd")
 
 enum DeliveryMethod { HELICOPTER, CONVOY, AIRDROP }
 enum RequestPriority { LOW, NORMAL, HIGH, EMERGENCY }
@@ -245,9 +246,13 @@ func _spawn_units(request: ReinforcementRequest, hidden: bool) -> Array[Node3D]:
 		unit.name = "Reinforcement_%d_%d" % [request.id, i]
 		unit.data = data
 
-		# Offset position
+		# Offset position on the XZ plane, then resolve a ground-correct Y.
+		# Units may spawn before the heightmap finishes async init (get_height_at
+		# returns a 0.0 sentinel during that window). sample_ground_now() keeps the
+		# destination Y when terrain is not ready rather than slamming to Y=0.
 		var offset := Vector3(randf_range(-3, 3), 0, randf_range(-3, 3))
-		unit.position = spawn_pos + offset
+		var desired: Vector3 = spawn_pos + offset
+		unit.position = DeferredSpawnHelperClass.sample_ground_now(self, desired)
 
 		if hidden:
 			unit.visible = false
@@ -255,6 +260,11 @@ func _spawn_units(request: ReinforcementRequest, hidden: bool) -> Array[Node3D]:
 
 		get_tree().current_scene.add_child(unit)
 		units.append(unit)
+
+		# Fire-and-forget: correct Y once terrain finishes loading (covers the
+		# case where terrain was not ready at spawn time - hidden reinforcements
+		# would otherwise stay at Y=0 through their reveal).
+		DeferredSpawnHelperClass.snap_to_ground_when_ready(self, unit)
 
 		# Emit spawn signal
 		var faction: int = data.faction if data.has_method("get") else GameEnums.Faction.US_ARMY

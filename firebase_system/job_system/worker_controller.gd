@@ -10,6 +10,10 @@ const UnifiedJobClass = preload("res://firebase_system/job_system/unified_job.gd
 const GridCoordsClass = preload("res://terrain/core/grid_coords.gd")
 const PrintThrottleClass = preload("res://battle_system/utils/print_throttle.gd")
 
+## Gate per-event debug prints. Keep false in normal play; errors/warnings and
+## one-time init messages are never gated by this.
+const DEBUG := false
+
 ## Worker states
 enum State {
 	IDLE,           # Not doing anything
@@ -55,6 +59,7 @@ var _job_search_timer: float = 0.0
 var _work_timer: float = 0.0
 var _stuck_timer: float = 0.0  # Track how long we've been stuck
 var _was_in_combat: bool = false  # Track previous combat state for edge detection
+var _logged_no_work: bool = false  # Throttle: only warn once per no-work idle spell
 
 ## Tree-felling state (CLEAR_TERRAIN jobs - worker walks to and chops individual trees)
 var _target_tree: Node3D = null  # The tree currently being chopped
@@ -548,27 +553,17 @@ func _find_work() -> void:
 	)
 
 	if best_job:
-		# Debug disabled - causes console spam
-		#print("[WorkerController] %s found job #%d (type %d)" % [worker.name, best_job.job_id, best_job.job_type])
 		_claim_job(best_job)
 	else:
-		# TEMPORARY DEBUG: Understand why bulldozer stays idle
-		var all_jobs: Array = _job_system.get_all_jobs() if _job_system.has_method("get_all_jobs") else []
-		var ready_jobs: Array = _job_system.get_jobs_needing_workers(worker_class)
-		# Only print once every ~5 seconds to avoid spam
-		if Engine.get_frames_drawn() % 300 == 0:
-			print("[WorkerController] %s (%s) IDLE: %d total jobs, %d ready for %s (search_radius=%.0f)" % [
-				worker.name, worker_class, all_jobs.size(), ready_jobs.size(), worker_class, search_radius
+		# Log ONCE on transition into a no-work idle spell (not per frame).
+		# Surfaces the "worker silently idles / never finds the road job" bug
+		# without flooding the console. Flag resets when a job is next claimed.
+		if not _logged_no_work:
+			_logged_no_work = true
+			var ready_count: int = _job_system.get_jobs_needing_workers(worker_class).size()
+			push_warning("[WorkerController] %s (%s) found no reachable job (%d need workers, search_radius=%.0f)" % [
+				worker.name, worker_class, ready_count, search_radius
 			])
-			# Print details of the first few jobs
-			for i in range(mini(3, all_jobs.size())):
-				var job: UnifiedJobClass = all_jobs[i]
-				if is_instance_valid(job):
-					print("  Job #%d: type=%d, state=%d, workers=%d/%d, can_work=%s" % [
-						job.job_id, job.job_type, job.state,
-						job.assigned_workers.size(), job.max_workers,
-						str(job.can_be_worked())
-					])
 
 
 func _score_job(job: UnifiedJobClass) -> float:
@@ -589,8 +584,11 @@ func _score_job(job: UnifiedJobClass) -> float:
 	# Base score from priority (CRITICAL=0 gets 400, LOW=3 gets 100)
 	var priority_score: float = (4 - job.priority) * 100.0
 
-	# Distance penalty
-	var dist: float = worker.global_position.distance_to(job.get_centroid())
+	# Distance penalty - measured on the XZ plane so a stale/pre-terrain Y
+	# (worker at Y=0 before heightmap load, job on a hill) can't distort scoring.
+	var worker_pos: Vector3 = worker.global_position
+	var job_centroid: Vector3 = job.get_centroid()
+	var dist: float = Vector2(worker_pos.x - job_centroid.x, worker_pos.z - job_centroid.z).length()
 	var distance_penalty: float = dist * 2.0
 
 	# Bonus for jobs already in progress
@@ -613,6 +611,9 @@ func _claim_job(job: UnifiedJobClass) -> void:
 	# Try to assign ourselves to the job
 	if not job.assign_worker(worker):
 		return  # Job is full
+
+	# Found work - allow the no-work warning to fire again next idle spell.
+	_logged_no_work = false
 
 	# Reset path-clearing counter for new job
 	_path_clear_attempts = 0
@@ -813,10 +814,11 @@ func _cache_trees_in_job() -> void:
 		if _point_in_bounds(t.global_position, bounds):
 			_cached_job_trees.append(t)
 
-	print("[WorkerController] %s cached %d trees in job bounds (checked %d, bounds: %v to %v)" % [
-		worker.name, _cached_job_trees.size(), checked,
-		bounds.position, bounds.end
-	])
+	if DEBUG:
+		print("[WorkerController] %s cached %d trees in job bounds (checked %d, bounds: %v to %v)" % [
+			worker.name, _cached_job_trees.size(), checked,
+			bounds.position, bounds.end
+		])
 
 
 func _find_nearest_unclaimed_tree() -> Node3D:

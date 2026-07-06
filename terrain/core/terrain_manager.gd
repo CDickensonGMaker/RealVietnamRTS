@@ -77,11 +77,13 @@ func _process(_delta: float) -> void:
 	if not is_ready:
 		return
 
+	var frame_start := Time.get_ticks_msec()
+
 	# Process deferred chunk loading (prevents frame spikes when camera moves)
 	_process_load_queue()
 
 	# Process deferred chunk rebuilds (prevents frame spikes)
-	_process_rebuild_queue()
+	_process_rebuild_queue(frame_start)
 
 	# Stream chunks around camera
 	if camera:
@@ -106,14 +108,21 @@ func _process_load_queue() -> void:
 			_load_chunk(coord)
 
 
-## Process queued chunk rebuilds with time budget
-func _process_rebuild_queue() -> void:
+## Process queued chunk rebuilds with time budget (A2)
+## frame_start_ms: timestamp captured at the top of _process so rebuilds account for time
+## already spent this frame (e.g. chunk loading). -1 skips the frame-level check.
+func _process_rebuild_queue(frame_start_ms: int = -1) -> void:
 	if _rebuild_queue.is_empty():
+		return
+
+	# If the frame is already over the rebuild budget (loading ate the frame), skip
+	# rebuilds entirely this frame rather than compounding the spike.
+	if frame_start_ms >= 0 and Time.get_ticks_msec() - frame_start_ms > REBUILD_BUDGET_MS:
 		return
 
 	var start_time := Time.get_ticks_msec()
 	while not _rebuild_queue.is_empty():
-		# Check time budget
+		# Never START another chunk once we're over budget - stop after the current one.
 		if Time.get_ticks_msec() - start_time > REBUILD_BUDGET_MS:
 			break  # Continue next frame
 
@@ -121,7 +130,8 @@ func _process_rebuild_queue() -> void:
 		_rebuild_chunk_immediate(coord)
 
 
-## Queue a chunk for deferred rebuild (prevents frame spikes)
+## Queue a chunk for deferred rebuild (prevents frame spikes).
+## Deduped: a chunk queued repeatedly collapses to a single pending rebuild.
 func queue_chunk_rebuild(coord: Vector2i) -> void:
 	if coord not in _rebuild_queue:
 		_rebuild_queue.append(coord)

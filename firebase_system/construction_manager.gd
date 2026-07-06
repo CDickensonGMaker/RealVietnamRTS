@@ -23,6 +23,11 @@ const ConstructionZone = preload("res://firebase_system/construction_zone.gd")
 const BuildingData = preload("res://firebase_system/building_data.gd")
 const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
 
+## Debug print control - keep false to silence per-event construction prints (job
+## register/complete, spawns, firebase activation). One-time init, errors and warnings
+## still print. Matches terrain_chunk.gd:6 pattern.
+const DEBUG := false
+
 ## Construction queue (per firebase)
 var construction_queues: Dictionary = {}  # firebase -> Array of building_types
 
@@ -188,7 +193,8 @@ func _try_start_construction(firebase: Node3D, building_type: int) -> bool:
 			# Instead of failing, route through JobSystem which handles prerequisites
 			var job_system := get_node_or_null("/root/JobSystem")
 			if job_system:
-				print("[ConstructionManager] Terrain not cleared - creating job with prerequisites")
+				if DEBUG:
+					print("[ConstructionManager] Terrain not cleared - creating job with prerequisites")
 				var job: UnifiedJob = job_system.create_build_job(
 					zone.global_position,
 					building_type,
@@ -320,7 +326,8 @@ func reset() -> void:
 		for child in _building_container.get_children():
 			child.queue_free()
 
-	print("[ConstructionManager] Reset - cleared all construction state")
+	if DEBUG:
+		print("[ConstructionManager] Reset - cleared all construction state")
 
 
 func cancel_construction(zone: ConstructionZone) -> void:
@@ -338,9 +345,10 @@ func cancel_construction(zone: ConstructionZone) -> void:
 				var supply_mgr := get_node_or_null("/root/SupplyManager")
 				if supply_mgr and supply_mgr.has_method("add_global_supply"):
 					supply_mgr.add_global_supply(refund_amount)
-					print("[ConstructionManager] Refunded %d supply (%.0f%% of %d) for cancelled %s" % [
-						refund_amount, refund_ratio * 100, zone.building_data.supply_cost, zone.building_data.display_name
-					])
+					if DEBUG:
+						print("[ConstructionManager] Refunded %d supply (%.0f%% of %d) for cancelled %s" % [
+							refund_amount, refund_ratio * 100, zone.building_data.supply_cost, zone.building_data.display_name
+						])
 				else:
 					# Fallback to firebase
 					var firebase: Node3D = _find_firebase_for_zone(zone)
@@ -362,9 +370,10 @@ func register_job(job: UnifiedJob) -> void:
 	"""Register a job for tracking"""
 	if job and job not in active_jobs:
 		active_jobs.append(job)
-		print("[ConstructionManager] Registered job #%d: %s" % [
-			job.job_id, UnifiedJob.get_type_name(job.job_type)
-		])
+		if DEBUG:
+			print("[ConstructionManager] Registered job #%d: %s" % [
+				job.job_id, UnifiedJob.get_type_name(job.job_type)
+			])
 
 
 func unregister_job(job: UnifiedJob) -> void:
@@ -396,9 +405,10 @@ func enqueue_build_with_prerequisites(
 
 	if job:
 		register_job(job)
-		print("[ConstructionManager] Enqueued build job #%d with prerequisites for building type %d" % [
-			job.job_id, building_type
-		])
+		if DEBUG:
+			print("[ConstructionManager] Enqueued build job #%d with prerequisites for building type %d" % [
+				job.job_id, building_type
+			])
 
 	return job
 
@@ -415,7 +425,8 @@ func get_active_job_count() -> int:
 func _on_job_completed(job: UnifiedJob) -> void:
 	"""Handle job completion"""
 	unregister_job(job)
-	print("[ConstructionManager] Job #%d completed" % job.job_id)
+	if DEBUG:
+		print("[ConstructionManager] Job #%d completed" % job.job_id)
 
 
 func _on_job_cancelled(job: UnifiedJob) -> void:
@@ -458,12 +469,14 @@ func spawn_building_at(world_position: Vector3, building_type: int, rotation_y: 
 		if scene:
 			building = scene.instantiate()
 			building.name = display_name.replace(" ", "_")
-			print("[ConstructionManager] Spawned %s from %s" % [display_name, model_path])
+			if DEBUG:
+				print("[ConstructionManager] Spawned %s from %s" % [display_name, model_path])
 
 	# Fallback to placeholder box if model not found
 	if not building:
 		building = _create_placeholder_building(data, building_type)
-		print("[ConstructionManager] Created placeholder for %s (model not found: %s)" % [display_name, model_path])
+		if DEBUG:
+			print("[ConstructionManager] Created placeholder for %s (model not found: %s)" % [display_name, model_path])
 
 	# Position and rotate
 	building.position = world_position
@@ -495,7 +508,8 @@ func _handle_hq_building_completion(hq_building: Node3D, building_data: Building
 	"""Handle HQ building (TOC) completion - create or activate firebase.
 	When a TOC completes construction, it creates a firebase zone that enables
 	other buildings to be placed within its influence radius."""
-	print("[ConstructionManager] HQ building completed at %v - activating firebase" % world_position)
+	if DEBUG:
+		print("[ConstructionManager] HQ building completed at %v - activating firebase" % world_position)
 
 	# Check if there's already a firebase at this location
 	# Use EntityCache for efficient cached lookups
@@ -516,14 +530,16 @@ func _handle_hq_building_completion(hq_building: Node3D, building_data: Building
 
 	if existing_firebase:
 		# Activate existing firebase with this HQ
-		print("[ConstructionManager] Found existing firebase '%s' - activating with HQ" % (
-			existing_firebase.firebase_name if "firebase_name" in existing_firebase else "unknown"
-		))
+		if DEBUG:
+			print("[ConstructionManager] Found existing firebase '%s' - activating with HQ" % (
+				existing_firebase.firebase_name if "firebase_name" in existing_firebase else "unknown"
+			))
 		if existing_firebase.has_method("_activate_with_hq"):
 			existing_firebase._activate_with_hq(hq_building, building_data)
 	else:
 		# Create new firebase centered on the TOC
-		print("[ConstructionManager] Creating new firebase for HQ building")
+		if DEBUG:
+			print("[ConstructionManager] Creating new firebase for HQ building")
 		var Firebase = load("res://firebase_system/firebase.gd")
 		if Firebase:
 			var firebase: Node3D = Firebase.new()
@@ -538,9 +554,10 @@ func _handle_hq_building_completion(hq_building: Node3D, building_data: Building
 			if firebase.has_method("_activate_with_hq"):
 				firebase._activate_with_hq(hq_building, building_data)
 
-			print("[ConstructionManager] Created and activated firebase '%s' with %.0fm influence" % [
-				firebase.firebase_name, building_data.influence_radius
-			])
+			if DEBUG:
+				print("[ConstructionManager] Created and activated firebase '%s' with %.0fm influence" % [
+					firebase.firebase_name, building_data.influence_radius
+				])
 
 
 func _get_firebase_phonetic_name() -> String:
@@ -625,10 +642,11 @@ func _on_construction_started(_firebase: Node3D, zone: Node3D) -> void:
 	# Limit to max engineers per zone
 	var to_assign: int = mini(idle_engineers.size(), max_engineers_per_zone)
 
-	print("[ConstructionManager] Auto-assigning %d engineers to %s" % [
-		to_assign,
-		construction_zone.building_data.display_name if construction_zone.building_data else "construction"
-	])
+	if DEBUG:
+		print("[ConstructionManager] Auto-assigning %d engineers to %s" % [
+			to_assign,
+			construction_zone.building_data.display_name if construction_zone.building_data else "construction"
+		])
 
 	for i in to_assign:
 		var engineer: Node3D = idle_engineers[i]
@@ -729,7 +747,8 @@ func _on_engineer_arrived(engineer: Node3D, zone: ConstructionZone) -> void:
 	"""Called when engineer arrives at construction zone"""
 	# Ensure engineer is still assigned to this zone
 	if engineer in zone.assigned_engineers:
-		print("[ConstructionManager] Engineer %s arrived at construction site" % engineer.name)
+		if DEBUG:
+			print("[ConstructionManager] Engineer %s arrived at construction site" % engineer.name)
 
 
 func create_firebase_at(position: Vector3, fb_name: String = "Firebase") -> Node3D:
@@ -737,7 +756,7 @@ func create_firebase_at(position: Vector3, fb_name: String = "Firebase") -> Node
 	# Check if terrain is cleared
 	var clearing_system: Node = get_node_or_null("/root/TerrainClearingSystem")
 	if clearing_system and not clearing_system.is_cleared(position):
-		print("[ConstructionManager] Cannot create firebase - terrain not cleared")
+		push_warning("[ConstructionManager] Cannot create firebase - terrain not cleared")
 		return null
 
 	var firebase := Firebase.new()
@@ -747,7 +766,8 @@ func create_firebase_at(position: Vector3, fb_name: String = "Firebase") -> Node
 
 	get_tree().current_scene.add_child(firebase)
 
-	print("[ConstructionManager] Created firebase '%s' at %s" % [fb_name, position])
+	if DEBUG:
+		print("[ConstructionManager] Created firebase '%s' at %s" % [fb_name, position])
 	return firebase
 
 
@@ -808,9 +828,10 @@ func register_scene_placed_hq_buildings() -> int:
 		# Create and activate firebase for this HQ
 		_handle_hq_building_completion(hq, toc_data, hq.global_position)
 		registered += 1
-		print("[ConstructionManager] Registered scene-placed HQ: %s" % hq.name)
+		if DEBUG:
+			print("[ConstructionManager] Registered scene-placed HQ: %s" % hq.name)
 
-	if registered > 0:
+	if registered > 0 and DEBUG:
 		print("[ConstructionManager] Registered %d scene-placed HQ building(s)" % registered)
 
 	return registered

@@ -14,6 +14,12 @@ var _cells: Dictionary = {}  # Vector2i -> Array[Node3D]
 var _unit_cells: Dictionary = {}  # Node3D -> Vector2i
 var _unit_factions: Dictionary = {}  # Node3D -> faction
 
+## Rebin throttle - cells are 20m, so sub-frame movement can't change a unit's
+## cell. Rebinning at ~15Hz instead of every frame removes wasted work; queries
+## scan a padded cell range so the small staleness never drops a unit.
+const POSITION_UPDATE_INTERVAL: float = 1.0 / 15.0  # ~0.067s
+var _position_update_accum: float = 0.0
+
 
 func _ready() -> void:
 	# Connect to unit signals
@@ -24,8 +30,12 @@ func _ready() -> void:
 	print("[SpatialHashGrid] Initialized with cell size %.1f" % CELL_SIZE)
 
 
-func _process(_delta: float) -> void:
-	# Update positions of all tracked units
+func _process(delta: float) -> void:
+	# Update positions of all tracked units at ~15Hz (see POSITION_UPDATE_INTERVAL)
+	_position_update_accum += delta
+	if _position_update_accum < POSITION_UPDATE_INTERVAL:
+		return
+	_position_update_accum = 0.0
 	_update_unit_positions()
 
 

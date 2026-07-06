@@ -118,6 +118,27 @@ const SLOPE_QUERY_INTERVAL: float = 0.1
 var _slope_query_timer: float = 0.0
 var _cached_slope: float = 0.0
 
+# --- Tiered subsystem updates (steady-state FPS) -----------------------------
+# Movement/physics/combat stay at 60Hz; heavier per-squad subsystems (behavior
+# tree, morale, suppression decay, cover detection, resources) run on a
+# staggered ~10Hz slice. Sliced processors receive accumulated delta
+# (delta * TICK_DIVISOR) so all time-based math stays rate-correct.
+const TICK_DIVISOR: int = 6  # 60fps / 6 = ~10Hz for sliced subsystem updates
+var _tick_offset: int = 0    # Per-squad frame offset so squads don't all tick together
+
+# Cached node refs (avoid per-frame string-path get_node_or_null lookups)
+var _terrain_integration: Node = null
+var _spatial_grid: Node = null
+var _last_snap_xz: Vector2 = Vector2(INF, INF)  # Skip terrain snap when XZ unchanged
+
+# Animation LOD by camera distance (per RTS architecture reference thresholds)
+const ANIM_LOD_NEAR: float = 30.0   # <30m: full rate (every frame)
+const ANIM_LOD_MID: float = 80.0    # 30-80m: half rate
+const ANIM_LOD_FAR: float = 150.0   # 80-150m: quarter rate; >150m: frozen
+var _camera: Camera3D = null
+var _anim_update_interval: int = 1  # Frames between animator updates (0 = frozen)
+var _anim_accum_delta: float = 0.0  # Accumulated delta for scaled animator updates
+
 # Ammo tracking - total rounds carried, not just magazine
 # Standard combat load: ~7 magazines for rifles (Vietnam era)
 # Fix 1 (continued): M16 uses 30-round magazines, 7 mags = 210 total rounds
@@ -290,6 +311,18 @@ func _ready() -> void:
 	# Cache autoload reference
 	_veterancy_tracker = get_node_or_null("/root/VeterancyTracker")
 
+	# Cache node refs for tiered updates (avoid per-frame string-path lookups)
+	_terrain_integration = get_node_or_null("/root/TerrainIntegration")
+	_spatial_grid = get_node_or_null("/root/SpatialHashGrid")
+
+	# Per-squad frame offset so subsystem slices stagger across the army (~10Hz)
+	_tick_offset = int(get_instance_id() % TICK_DIVISOR)
+
+	# Cache active camera for animation LOD (re-checked on the 10Hz slice)
+	var vp := get_viewport()
+	if vp:
+		_camera = vp.get_camera_3d()
+
 	_setup_placeholder_visuals()
 	_setup_collision()
 	_apply_data()
@@ -327,23 +360,34 @@ func _physics_process(delta: float) -> void:
 	if state == State.DEAD:
 		return
 
-	# Update behavior tree if assigned and not paused
-	if behavior_tree and not bt_paused:
-		_sync_blackboard()
-		behavior_tree.update(delta)
+	# --- ~10Hz staggered slice: AI decisions & slow subsystems ----------------
+	# Runs once every TICK_DIVISOR frames, offset per-squad so load spreads out.
+	# Sliced processors receive accumulated delta (delta * TICK_DIVISOR) so all
+	# time-based math (decay, consumption, recovery) stays rate-correct.
+	if (Engine.get_physics_frames() + _tick_offset) % TICK_DIVISOR == 0:
+		var slice_delta: float = delta * TICK_DIVISOR
 
-	# Process resource depletion and resupply
-	_process_resources(delta)
+		# Update behavior tree if assigned and not paused
+		if behavior_tree and not bt_paused:
+			_sync_blackboard()
+			behavior_tree.update(slice_delta)
 
-	# Process morale system (Phase 3)
-	_process_morale(delta)
+		# Process resource depletion and resupply
+		_process_resources(slice_delta)
 
-	# Process suppression decay
-	_process_suppression(delta)
+		# Process morale system (Phase 3)
+		_process_morale(slice_delta)
 
-	# Process cover detection and seeking (Phase 4.2)
-	_process_cover_behavior(delta)
+		# Process suppression decay
+		_process_suppression(slice_delta)
 
+		# Process cover detection (Phase 4.2 - seeking movement stays at 60Hz below)
+		_process_cover_behavior(slice_delta)
+
+		# Refresh animation LOD tier from camera distance
+		_update_animation_lod()
+
+	# --- 60Hz: movement, physics, combat cooldowns, animation, terrain snap ----
 	# Process combat cooldown (legacy single cooldown)
 	if attack_cooldown > 0.0:
 		attack_cooldown -= delta
@@ -381,7 +425,11 @@ func _physics_process(delta: float) -> void:
 			# Idle separation - prevent bunching when stationary
 			_process_idle_separation(delta)
 
-	# Process procedural animation
+	# Cover-seeking travel stays at 60Hz for smooth movement (detection is on the slice)
+	if _seeking_cover and state != State.ROUTING and not (data and data.is_vehicle):
+		_process_cover_seeking(delta)
+
+	# Process procedural animation (LOD-gated internally)
 	_update_animation(delta)
 
 	# Always snap to terrain at end of physics to prevent slope drift
@@ -470,22 +518,31 @@ func _process_movement(delta: float) -> void:
 
 ## Snap unit to terrain height
 func _snap_to_terrain() -> void:
-	var terrain := get_node_or_null("/root/TerrainIntegration")
-	if terrain and terrain.has_method("get_height_at"):
-		var terrain_height: float = terrain.get_height_at(global_position)
-		global_position.y = terrain_height
+	if not _terrain_integration:
+		return
+	# Skip while the heightmap isn't populated yet (B1 terrain-ready API) so we
+	# don't stamp units to Y=0 before terrain generation completes.
+	if _terrain_integration.has_method("is_terrain_ready") and not _terrain_integration.is_terrain_ready():
+		return
+	# Only re-sample when the unit has actually moved on the XZ plane. Stationary
+	# units keep their last snapped height (saves a terrain lookup every frame).
+	var xz := Vector2(global_position.x, global_position.z)
+	if xz.is_equal_approx(_last_snap_xz):
+		return
+	_last_snap_xz = xz
+	if _terrain_integration.has_method("get_height_at"):
+		global_position.y = _terrain_integration.get_height_at(global_position)
 
 
 ## Calculate separation force to avoid bunching with nearby units
 func _calculate_separation() -> Vector3:
 	var separation_force := Vector3.ZERO
 
-	# Use SpatialHashGrid for efficient neighbor lookup
-	var grid := get_node_or_null("/root/SpatialHashGrid")
-	if not grid:
+	# Use SpatialHashGrid for efficient neighbor lookup (cached ref)
+	if not _spatial_grid:
 		return separation_force
 
-	var neighbors: Array[Node3D] = grid.get_units_in_radius(global_position, SEPARATION_RADIUS * 2.0)
+	var neighbors: Array[Node3D] = _spatial_grid.get_units_in_radius(global_position, SEPARATION_RADIUS * 2.0)
 
 	for neighbor in neighbors:
 		if neighbor == self:
@@ -1353,6 +1410,8 @@ func _update_suppression_visual() -> void:
 # =============================================================================
 
 ## Process cover detection and seeking behavior
+## Cover status detection. Runs on the ~10Hz slice; the actual cover-seeking
+## travel is driven at 60Hz from _physics_process so movement stays smooth.
 func _process_cover_behavior(delta: float) -> void:
 	# Skip if dead, routing, or vehicle (vehicles don't use cover)
 	if state == State.DEAD or state == State.ROUTING:
@@ -1365,10 +1424,6 @@ func _process_cover_behavior(delta: float) -> void:
 	if _cover_check_timer >= COVER_CHECK_INTERVAL:
 		_cover_check_timer = 0.0
 		_update_cover_status()
-
-	# Process seeking cover movement
-	if _seeking_cover:
-		_process_cover_seeking(delta)
 
 
 ## Update cover status at current position using CoverSystem
@@ -2155,11 +2210,10 @@ func _update_morale_modifiers() -> void:
 
 ## Count friendly units within 30m
 func _count_nearby_allies() -> int:
-	var grid := get_node_or_null("/root/SpatialHashGrid")
-	if not grid:
+	if not _spatial_grid:
 		return 0
 
-	var allies: Array[Node3D] = grid.get_units_in_radius(global_position, 30.0)
+	var allies: Array[Node3D] = _spatial_grid.get_units_in_radius(global_position, 30.0)
 	var count: int = 0
 	for ally in allies:
 		if ally == self:
@@ -3265,9 +3319,20 @@ func _setup_animator(model: Node3D) -> void:
 
 ## Update animation based on current state
 func _update_animation(delta: float) -> void:
+	# Animation LOD: accumulate time; the gate decides when to advance animators.
+	# Frozen tier (>150m) banks no time so re-entry into range doesn't jump.
+	if _anim_update_interval <= 0:
+		_anim_accum_delta = 0.0
+	else:
+		_anim_accum_delta += delta
+	var advance: bool = _anim_should_advance()
+	var anim_delta: float = _anim_accum_delta
+	if advance:
+		_anim_accum_delta = 0.0
+
 	# Handle piece-based animation (Spring 1944 infantry)
 	if _use_piece_animation and _piece_animators.size() > 0:
-		_update_piece_animation(delta)
+		_update_piece_animation(anim_delta, advance)
 		return
 
 	# Handle vehicle/legacy animation
@@ -3300,13 +3365,45 @@ func _update_animation(delta: float) -> void:
 	if current_target and _animator:
 		_animator.set_turret_target(current_target.global_position)
 
-	_animator.process_animation(delta)
+	# Advance the animator only on LOD-permitted frames (accumulated delta)
+	if advance:
+		_animator.process_animation(anim_delta)
+
+
+## Determine whether animators should advance this frame under the current LOD tier.
+func _anim_should_advance() -> bool:
+	if _anim_update_interval <= 0:
+		return false  # Frozen (>150m from camera)
+	if _anim_update_interval == 1:
+		return true   # Full rate (<30m)
+	return (Engine.get_physics_frames() + _tick_offset) % _anim_update_interval == 0
+
+
+## Refresh the animation LOD tier from camera distance. Called on the 10Hz slice.
+func _update_animation_lod() -> void:
+	# Re-acquire camera if it was unavailable at _ready or the scene changed.
+	if not is_instance_valid(_camera):
+		var vp := get_viewport()
+		_camera = vp.get_camera_3d() if vp else null
+	if not _camera:
+		_anim_update_interval = 1  # No camera: default to full rate
+		return
+
+	var dist: float = global_position.distance_to(_camera.global_position)
+	if dist < ANIM_LOD_NEAR:
+		_anim_update_interval = 1   # Full rate (<30m)
+	elif dist < ANIM_LOD_MID:
+		_anim_update_interval = 2   # Half rate (30-80m)
+	elif dist < ANIM_LOD_FAR:
+		_anim_update_interval = 4   # Quarter rate (80-150m)
+	else:
+		_anim_update_interval = 0   # Frozen (>150m)
 
 
 ## Update piece-based animation for Spring 1944 infantry models
 var _last_anim_state: State = State.IDLE
 var _last_worker_state: int = -1  # Track worker state for animation priority
-func _update_piece_animation(delta: float) -> void:
+func _update_piece_animation(anim_delta: float, advance: bool) -> void:
 	# If this unit has a WorkerController, worker state takes priority over squad state
 	# (WorkerController handles its own animation via _on_worker_state_changed)
 	if _worker_controller:
@@ -3314,9 +3411,10 @@ func _update_piece_animation(delta: float) -> void:
 		if wc_state != _last_worker_state:
 			_last_worker_state = wc_state
 			# Worker animation is handled by _on_worker_state_changed callback
-			# Just update animators each frame
-		for animator in _piece_animators:
-			animator.update(delta)
+		# Advance animators only on LOD-permitted frames (accumulated delta)
+		if advance:
+			for animator in _piece_animators:
+				animator.update(anim_delta)
 		return
 
 	# Detect state change and trigger appropriate pose/cycle for all soldiers
@@ -3352,9 +3450,10 @@ func _update_piece_animation(delta: float) -> void:
 					animator.stop_cycle()
 					animator.set_pose("stand_idle")
 
-	# Update all animators each frame
-	for animator in _piece_animators:
-		animator.update(delta)
+	# Advance all animators (LOD-gated, accumulated delta)
+	if advance:
+		for animator in _piece_animators:
+			animator.update(anim_delta)
 
 
 # =============================================================================

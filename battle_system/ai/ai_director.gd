@@ -55,6 +55,13 @@ var _recent_casualties: int = 0  # Casualties in last 30 seconds
 var _casualty_timer: float = 0.0
 var _firebase_under_attack: bool = false
 var _supply_critical: bool = false
+
+## Battlefield sampling throttle - the group scans + per-unit reflection in
+## _update_stress/_assess_battlefield are heavy; ~1Hz sampling preserves pacing
+## decisions without a full census every frame.
+const ASSESS_INTERVAL: float = 1.0
+var _assess_accum: float = 0.0
+
 const STRESS_DECAY_RATE: float = 0.05  # Stress decays per second when conditions improve
 const STRESS_CASUALTY_WEIGHT: float = 0.15  # Per casualty
 const STRESS_FIREBASE_ATTACK_WEIGHT: float = 0.3
@@ -128,20 +135,19 @@ func _process(delta: float) -> void:
 	game_time += delta
 	phase_timer += delta
 
-	# Update stress system (L4D-style)
-	_update_stress(delta)
-
-	# Update difficulty over time
+	# Lightweight, per-frame (cheap; needed for smooth difficulty/phase timing)
 	_update_difficulty(delta)
-
-	# Update game phase
 	_update_game_phase()
-
-	# Assess battlefield
-	_assess_battlefield()
-
-	# Process tension cycle (adjusted by stress)
 	_process_tension_cycle(delta)
+
+	# Heavy battlefield sampling (group scans + per-unit reflection) runs at ~1Hz
+	# rather than every frame. Accumulated delta keeps stress time-math rate-correct.
+	_assess_accum += delta
+	if _assess_accum >= ASSESS_INTERVAL:
+		var assess_delta: float = _assess_accum
+		_assess_accum = 0.0
+		_update_stress(assess_delta)
+		_assess_battlefield()
 
 
 func _update_stress(delta: float) -> void:

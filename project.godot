@@ -64,9 +64,6 @@ AITickManager="*res://battle_system/ai/ai_tick_manager.gd"
 FloatingLabelManager="*res://battle_system/ui/floating_label_manager.gd"
 BattleHUD="*res://battle_system/ui/battle_hud.gd"
 
-; === DEBUG ===
-TestDaemon="*res://test_daemon/daemon_autoload.gd"
-
 [display]
 
 window/size/viewport_width=1920

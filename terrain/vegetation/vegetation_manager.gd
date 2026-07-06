@@ -6,6 +6,10 @@ extends Node3D
 ## Reads terrain type from TerrainGrid (SINGLE SOURCE OF TRUTH)
 ## NOTE: Terrain types are defined in TerrainTypes (terrain/terrain_types.gd)
 
+## Debug print control - keep false so per-chunk/per-region regen prints don't spam
+## the console during clearing (a hot path). Matches terrain_chunk.gd:6 pattern.
+const DEBUG_PRINTS := false
+
 ## Import unified terrain types
 const TerrainTypesConst = preload("res://terrain/terrain_types.gd")
 const GridCoordsClass = preload("res://terrain/core/grid_coords.gd")
@@ -180,7 +184,8 @@ func _on_vegetation_updated(region: Rect2i) -> void:
 					heightmap = _terrain_grid.get_heightmap()
 				regenerate_chunk(chunk_coord, heightmap)
 
-	print("[VegetationManager] Regenerated chunks for cleared region: %s" % region)
+	if DEBUG_PRINTS:
+		print("[VegetationManager] Regenerated chunks for cleared region: %s" % region)
 
 
 ## Update visibility based on frustum and distance
@@ -665,9 +670,10 @@ func _materialize_vegetation(chunk_coord: Vector2i, heightmap: Object) -> void:
 		container.add_child(mm_instance)
 		total_trees += fallback_transforms.size()
 
-	print("[VegetationManager] Chunk %s: %d trees materialized (density models: %d types)" % [
-		chunk_coord, total_trees, transforms_by_type.size()
-	])
+	if DEBUG_PRINTS:
+		print("[VegetationManager] Chunk %s: %d trees materialized (density models: %d types)" % [
+			chunk_coord, total_trees, transforms_by_type.size()
+		])
 
 
 ## Materialize grass from placement cache based on current terrain types

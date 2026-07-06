@@ -192,12 +192,25 @@ func _auto_build_road_to_position(new_depot_pos: Vector3) -> void:
 	var target_name: String = ""
 	var target_dist: float = INF
 
+	# Fallback anchor: nearest firebase IGNORING MIN_ROAD_DISTANCE (i.e. the
+	# depot's own parent firebase). Used only when no proper anchor is found so
+	# a lone firebase's first depot still produces a BUILD_ROAD job for the
+	# bulldozer instead of silently returning with nothing to cut.
+	var fallback_pos: Vector3 = Vector3.ZERO
+	var fallback_name: String = ""
+	var fallback_dist: float = INF
+
 	# Check firebases first (using EntityCache for efficiency)
 	var entity_cache: Node = get_node_or_null("/root/EntityCache")
 	if entity_cache and entity_cache.has_method("get_nearest_firebase"):
 		var firebase: Node = entity_cache.get_nearest_firebase(new_depot_pos, false)
 		if is_instance_valid(firebase):
 			var dist: float = new_depot_pos.distance_to(firebase.global_position)
+			# Remember as fallback anchor even when closer than MIN_ROAD_DISTANCE.
+			if dist > 2.0 and dist < fallback_dist:
+				fallback_pos = firebase.global_position
+				fallback_name = str(firebase.name) if firebase.name else "firebase"
+				fallback_dist = dist
 			if dist > MIN_ROAD_DISTANCE and dist < target_dist:
 				target_pos = firebase.global_position
 				target_name = str(firebase.name) if firebase.name else "firebase"
@@ -212,10 +225,22 @@ func _auto_build_road_to_position(new_depot_pos: Vector3) -> void:
 			target_name = str(nearest_depot.name) if nearest_depot.name else "depot"
 			target_dist = depot_dist
 
-	# No valid target found
+	# No proper anchor beyond MIN_ROAD_DISTANCE - fall back to the parent
+	# firebase so the first road is still tasked. Only give up if there is
+	# genuinely nothing to anchor to.
 	if target_dist == INF:
-		print("[SupplyChainManager] No firebase or depot to connect to from %v" % new_depot_pos)
-		return
+		if fallback_dist < INF:
+			target_pos = fallback_pos
+			target_name = fallback_name + " (fallback anchor)"
+			target_dist = fallback_dist
+			push_warning("[SupplyChainManager] No depot/firebase beyond %.0fm of %v; anchoring first road to nearest firebase '%s' at %.1fm" % [
+				MIN_ROAD_DISTANCE, new_depot_pos, fallback_name, fallback_dist
+			])
+		else:
+			push_warning("[SupplyChainManager] No firebase or depot to anchor a road from %v (searched EntityCache nearest firebase + %d registered depots)" % [
+				new_depot_pos, _supply_depots.size()
+			])
+			return
 
 	# Plan and create road
 	var waypoints: Array[Vector3] = _plan_road_route(new_depot_pos, target_pos)

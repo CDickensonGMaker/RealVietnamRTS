@@ -23,6 +23,10 @@ var collision_body: StaticBody3D  # Optional - only for raycast picking
 var is_loaded: bool = false
 var height_scale: float = 280.0
 
+# Collision cook generation - bumped on unload so a deferred/in-flight trimesh cook
+# discards its result instead of applying to a recycled or freed chunk (A2).
+var _collision_generation: int = 0
+
 # Material (shared across chunks) - can be ShaderMaterial or StandardMaterial3D
 static var shared_material: Material
 static var _using_shader: bool = false
@@ -281,16 +285,47 @@ func create_raycast_collision() -> void:
 	if not mesh_instance.mesh:
 		return
 
+	# Build the body + an empty shape node now; defer the expensive trimesh cook off the
+	# synchronous chunk-rebuild path (A2 - the cook was a freeze source during rebuild bursts).
+	#
+	# We use call_deferred rather than WorkerThreadPool.add_task: chunks are queue_free'd
+	# during streaming/rebuild and Node is NOT ref-counted, so a worker task could
+	# dereference a freed chunk. is_instance_valid() can only guard the main-thread apply,
+	# not the worker thread's own access to `self`/the mesh. Deferring keeps the cook on the
+	# main thread (safe) while removing it from the budget-limited rebuild loop, so cooks
+	# spread naturally across frames. Collision correctness > raw speed.
 	collision_body = StaticBody3D.new()
 	collision_body.name = "RaycastCollision"
 	collision_body.collision_layer = 1  # Terrain layer
 	collision_body.collision_mask = 0   # No response
 
 	var collision_shape := CollisionShape3D.new()
-	collision_shape.shape = mesh_instance.mesh.create_trimesh_shape()
+	collision_shape.name = "CollisionShape"
 	collision_body.add_child(collision_shape)
 
 	add_child(collision_body)
+
+	# Guard the deferred cook with the current generation counter.
+	_cook_collision_deferred.call_deferred(mesh_instance.mesh, _collision_generation)
+
+
+## Cook the trimesh collision shape and apply it, unless the chunk was unloaded/rebuilt
+## while the call was queued (generation mismatch) or freed (invalid instance).
+func _cook_collision_deferred(mesh_ref: Mesh, generation: int) -> void:
+	if not is_instance_valid(self):
+		return
+	if generation != _collision_generation:
+		return
+	if not mesh_ref:
+		return
+	if not collision_body or not is_instance_valid(collision_body):
+		return
+
+	var collision_shape := collision_body.get_node_or_null("CollisionShape") as CollisionShape3D
+	if not collision_shape:
+		return
+
+	collision_shape.shape = mesh_ref.create_trimesh_shape()
 
 
 ## Bake navigation mesh for pathfinding
@@ -324,6 +359,8 @@ func bake_navigation() -> void:
 
 ## Unload chunk (free resources)
 func unload() -> void:
+	# Invalidate any pending deferred collision cook so it doesn't apply to a stale mesh.
+	_collision_generation += 1
 	if mesh_instance:
 		mesh_instance.mesh = null
 	if collision_body:

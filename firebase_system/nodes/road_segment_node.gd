@@ -53,6 +53,10 @@ var detection_areas: Array[Area3D] = []
 var _road_material: StandardMaterial3D
 var _outline_material: StandardMaterial3D
 
+## Dirt road texture + UV tiling (metres of road per texture repeat along length)
+const ROAD_TEXTURE_PATH := "res://assets/textures/terrain/dirt_road.png"
+const UV_TILE_PER_METER := 0.25
+
 
 func _ready() -> void:
 	# Add to groups
@@ -67,11 +71,18 @@ func _ready() -> void:
 
 
 func _setup_visuals() -> void:
-	# Road material (dirt/gravel)
+	# Road material - textured dirt road (falls back to a solid tint if the
+	# texture is missing). Alpha transparency lets the surface fade in as it builds.
 	_road_material = StandardMaterial3D.new()
-	_road_material.albedo_color = Color(0.5, 0.4, 0.3)
 	_road_material.roughness = 0.95
 	_road_material.metallic = 0.0
+	_road_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	if ResourceLoader.exists(ROAD_TEXTURE_PATH):
+		_road_material.albedo_texture = load(ROAD_TEXTURE_PATH)
+		_road_material.albedo_color = Color(1.0, 1.0, 1.0, 1.0)  # No tint when textured
+	else:
+		push_warning("[RoadSegment] Dirt road texture missing: " + ROAD_TEXTURE_PATH)
+		_road_material.albedo_color = Color(0.5, 0.4, 0.3, 1.0)
 
 	# Create road mesh
 	road_mesh = MeshInstance3D.new()
@@ -86,10 +97,11 @@ func _setup_visuals() -> void:
 	_outline_material.albedo_color = Color(0.6, 0.5, 0.3, 0.5)
 	_outline_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 
-	# Create outline
+	# Create outline - shown immediately as a "planned road" ghost at 0% progress
 	outline_mesh = MeshInstance3D.new()
 	outline_mesh.material_override = _outline_material
 	outline_mesh.position.y = 0.05
+	outline_mesh.visible = true
 	add_child(outline_mesh)
 
 	# Build initial outline from path
@@ -206,12 +218,15 @@ func add_work(amount: float) -> bool:
 
 
 func _update_visuals() -> void:
-	# Show road after 10% progress
-	if current_progress > 0.1:
+	# Show the built road surface from the very first work tick. The mesh grows
+	# with progress (length-based reveal) and fades from faint dust to solid.
+	if current_progress > 0.0:
 		road_mesh.visible = true
 		road_mesh.mesh = _create_road_mesh(current_progress)
+		# Faint at first, opaque by ~50% progress.
+		_road_material.albedo_color.a = clampf(0.35 + current_progress * 1.3, 0.35, 1.0)
 
-	# Fade outline
+	# Fade the planned-road outline out as the surface fills in.
 	_outline_material.albedo_color.a = lerpf(0.5, 0.1, current_progress)
 
 
@@ -220,13 +235,18 @@ func _complete() -> void:
 	is_complete = true
 
 	# Final visual update
+	road_mesh.visible = true
 	road_mesh.mesh = _create_road_mesh(1.0)
 
 	# Hide outline
 	outline_mesh.visible = false
 
-	# Darken road color for "worn in" look
-	_road_material.albedo_color = Color(0.45, 0.35, 0.25)
+	# Full opacity for the finished, worn-in road. Preserve the texture (only
+	# tint when running the untextured fallback path).
+	if _road_material.albedo_texture:
+		_road_material.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	else:
+		_road_material.albedo_color = Color(0.45, 0.35, 0.25, 1.0)
 
 	road_complete.emit()
 	print("[RoadSegment] Complete! %d points, %.1fm total" % [path_points.size(), get_total_length()])
@@ -309,13 +329,18 @@ func _create_road_mesh(progress: float) -> ArrayMesh:
 		if current_length >= built_length:
 			break
 
+		# UV V-coordinate tiles along the road length (before this segment).
+		var uv_start: float = current_length * UV_TILE_PER_METER
+
 		# Calculate how much of this segment to build
 		var segment_progress: float = 1.0
 		if current_length + segment_length > built_length:
 			segment_progress = (built_length - current_length) / segment_length
 			p2 = p1.lerp(p2, segment_progress)
 
-		current_length += segment_length * segment_progress
+		var built_seg_length: float = segment_length * segment_progress
+		current_length += built_seg_length
+		var uv_end: float = current_length * UV_TILE_PER_METER
 
 		# Calculate perpendicular direction
 		var dir: Vector3 = (p2 - p1).normalized()
@@ -326,20 +351,26 @@ func _create_road_mesh(progress: float) -> ArrayMesh:
 		p1.y = _get_terrain_height(p1) + 0.08
 		p2.y = _get_terrain_height(p2) + 0.08
 
-		# Quad for this segment
+		# Quad for this segment (U across width 0..1, V tiles along length)
 		var v1: Vector3 = p1 - perp - global_position
 		var v2: Vector3 = p1 + perp - global_position
 		var v3: Vector3 = p2 + perp - global_position
 		var v4: Vector3 = p2 - perp - global_position
 
 		# First triangle
+		st.set_uv(Vector2(0.0, uv_start))
 		st.add_vertex(v1)
+		st.set_uv(Vector2(1.0, uv_start))
 		st.add_vertex(v2)
+		st.set_uv(Vector2(1.0, uv_end))
 		st.add_vertex(v3)
 
 		# Second triangle
+		st.set_uv(Vector2(0.0, uv_start))
 		st.add_vertex(v1)
+		st.set_uv(Vector2(1.0, uv_end))
 		st.add_vertex(v3)
+		st.set_uv(Vector2(0.0, uv_end))
 		st.add_vertex(v4)
 
 	st.generate_normals()

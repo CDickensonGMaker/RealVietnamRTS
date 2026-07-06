@@ -542,8 +542,13 @@ func _sample_slope_ahead(move_dir: Vector3) -> float:
 
 func _snap_to_terrain() -> void:
 	var terrain := get_node_or_null("/root/TerrainIntegration")
-	if terrain and terrain.has_method("get_height_at"):
-		global_position.y = terrain.get_height_at(global_position)
+	if not terrain or not terrain.has_method("get_height_at"):
+		return
+	# Skip while the heightmap is still loading - get_height_at returns a 0.0
+	# sentinel during async init; writing it would slam the dozer below any hill.
+	if terrain.has_method("is_terrain_ready") and not terrain.is_terrain_ready():
+		return
+	global_position.y = terrain.get_height_at(global_position)
 
 
 func _on_component_damaged(component_type: int, current_hp: float, max_hp: float) -> void:

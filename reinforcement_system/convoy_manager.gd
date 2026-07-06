@@ -18,6 +18,7 @@ var active_convoys: Array[Convoy] = []
 
 ## Configuration
 @export var convoy_speed: float = 8.0  # m/s (~30 km/h)
+@export var off_road_speed_multiplier: float = 0.5  # Convoy speed when not on a road (Pillar 3: roads matter)
 @export var auto_resupply_enabled: bool = true
 @export var auto_resupply_interval: float = 180.0  # 3 minutes between checks
 @export var low_supply_threshold: float = 0.3  # 30% supply triggers resupply
@@ -26,6 +27,7 @@ var active_convoys: Array[Convoy] = []
 ## Auto-scheduling state
 var _resupply_timer: float = 0.0
 var _supply_depot: Node3D = null  # Main supply depot (rear base)
+var _road_network: Node = null  # RoadNetwork autoload (cached, resolved lazily)
 
 
 class Convoy:
@@ -177,7 +179,14 @@ func _move_convoy(convoy: Convoy, delta: float) -> void:
 	var target: Vector3 = convoy.route[convoy.route_index]
 	var direction: Vector3 = (target - convoy.current_position).normalized()
 	var distance: float = convoy.current_position.distance_to(target)
-	var move_dist: float = convoy_speed * delta
+
+	# Convoys crawl off-road and move at full speed on a road (Pillar 3 payoff).
+	var speed: float = convoy_speed
+	var road_net: Node = _get_road_network()
+	if road_net and road_net.has_method("is_on_road"):
+		if not road_net.is_on_road(convoy.current_position):
+			speed *= off_road_speed_multiplier
+	var move_dist: float = speed * delta
 
 	if move_dist >= distance:
 		convoy.current_position = target
@@ -267,19 +276,49 @@ func create_convoy(
 
 
 func _generate_route(origin: Node3D, destination: Node3D) -> Array[Vector3]:
-	"""Generate route between two points"""
-	var route: Array[Vector3] = []
-
+	"""Generate a route between two points.
+	Routes along the RoadNetwork graph when roads exist (Pillar 3: building
+	roads must matter); falls back to a straight-line path otherwise."""
 	var start: Vector3 = origin.global_position if origin else Vector3.ZERO
 	var end: Vector3 = destination.global_position if destination else Vector3.ZERO
 
-	# Simple waypoints along path
+	# Prefer a road-following route when the network has any built segments.
+	var road_net: Node = _get_road_network()
+	if road_net and road_net.has_method("find_path") and _road_network_has_segments(road_net):
+		var road_path: Array[Vector3] = road_net.find_path(start, end)
+		if road_path.size() >= 2:
+			return road_path
+
+	# Fallback: straight-line waypoints
+	var route: Array[Vector3] = []
 	var segments: int = 5
 	for i in range(1, segments + 1):
 		var t: float = float(i) / float(segments)
 		route.append(start.lerp(end, t))
 
 	return route
+
+
+func _get_road_network() -> Node:
+	"""Resolve (and cache) the RoadNetwork singleton, degrading gracefully."""
+	if is_instance_valid(_road_network):
+		return _road_network
+
+	_road_network = get_node_or_null("/root/RoadNetwork")
+	if not _road_network:
+		var nets: Array[Node] = get_tree().get_nodes_in_group("road_networks")
+		if not nets.is_empty():
+			_road_network = nets[0]
+
+	return _road_network
+
+
+func _road_network_has_segments(road_net: Node) -> bool:
+	"""True if the road network actually has built segments to route along."""
+	if not road_net.has_method("get_stats"):
+		return true  # Assume usable when we can't introspect
+	var stats: Dictionary = road_net.get_stats()
+	return int(stats.get("total_segments", 0)) > 0
 
 
 func _create_convoy_vehicles(convoy: Convoy) -> void:

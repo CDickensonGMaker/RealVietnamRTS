@@ -13,6 +13,14 @@ signal clearing_complete(position: Vector3, radius: float)
 ## Uses shared ClearingState.Stage enum (terrain/clearing_state.gd) as single source of truth
 const ClearingState = preload("res://terrain/clearing_state.gd")
 
+## Cell size (m) used to coalesce repeated apply_clearing_damage() calls at nearby
+## positions into a single shared ClearingSystem zone (bulldozers/fire call ~60Hz).
+const DAMAGE_ZONE_CELL := 8.0
+
+## Maps a quantized world cell -> ClearingSystem zone_id so continuous clearing at one
+## spot advances an existing zone instead of leaking a new zone every frame.
+var _damage_zones: Dictionary = {}  # Vector2i -> int (zone_id)
+
 
 func _ready() -> void:
 	# Connect to ClearingSystem signals to forward them
@@ -98,6 +106,32 @@ func get_cleared_area_count() -> int:
 	if is_instance_valid(ClearingSystem):
 		return ClearingSystem.zones.size()
 	return 0
+
+
+func apply_clearing_damage(world_pos: Vector3, radius: float, amount: float) -> void:
+	"""Progressive clearing at a world position (bulldozer clearing, road cutting, fire).
+	Delegates to ClearingSystem, coalescing repeated calls at the same spot into one zone
+	that we advance, rather than creating a zone per call. amount = progress this step
+	(0-1 per clearing stage). Callers (bulldozer.gd:357/392, fire_hazard.gd:238) rely on
+	this signature existing on the TerrainClearingSystem autoload."""
+	if not is_instance_valid(ClearingSystem):
+		return
+
+	var key := Vector2i(
+		int(floor(world_pos.x / DAMAGE_ZONE_CELL)),
+		int(floor(world_pos.z / DAMAGE_ZONE_CELL))
+	)
+
+	var zone_id: int = _damage_zones.get(key, -1)
+
+	# Create a fresh zone if we have none for this cell, or the cached one was removed.
+	if zone_id < 0 or not ClearingSystem.zones.has(zone_id):
+		zone_id = ClearingSystem.create_zone(world_pos, maxf(radius, DAMAGE_ZONE_CELL * 0.5))
+		if zone_id < 0:
+			return
+		_damage_zones[key] = zone_id
+
+	ClearingSystem.advance_clearing(zone_id, amount)
 
 
 ## =============================================================================

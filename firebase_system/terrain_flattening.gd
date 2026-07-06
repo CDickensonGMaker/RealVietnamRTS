@@ -12,6 +12,10 @@ signal flattening_completed(position: Vector3)
 
 const UnifiedJob = preload("res://firebase_system/job_system/unified_job.gd")
 
+## Debug print control - keep false to silence per-event flattening prints (hot during
+## construction). One-time init and warnings still print.
+const DEBUG := false
+
 ## Active flattening operations
 var _operations: Dictionary = {}  # key -> FlatteningOperation
 
@@ -51,9 +55,10 @@ func start_flattening(position: Vector3, size: Vector2) -> FlatteningOperation:
 	_operations[key] = op
 
 	flattening_started.emit(position, size)
-	print("[TerrainFlatteningSystem] Started flattening at %s (target height: %.2f)" % [
-		position, op.target_height
-	])
+	if DEBUG:
+		print("[TerrainFlatteningSystem] Started flattening at %s (target height: %.2f)" % [
+			position, op.target_height
+		])
 
 	return op
 
@@ -129,7 +134,8 @@ func _get_terrain_system() -> Node:
 	# Fallback: find any terrain manager in scene tree via group
 	for node in get_tree().get_nodes_in_group("terrain_managers"):
 		if node.has_method("get_height_at"):
-			print("[TerrainFlattening] Using scene-local terrain: %s" % node.name)
+			if DEBUG:
+				print("[TerrainFlattening] Using scene-local terrain: %s" % node.name)
 			return node
 
 	return null
@@ -140,7 +146,7 @@ func _calculate_target_height(position: Vector3, size: Vector2) -> float:
 	This ensures flattened areas connect cohesively with surroundings."""
 	var terrain := _get_terrain_system()
 	if not terrain:
-		print("[TerrainFlattening] WARNING: No terrain system found, using position.y")
+		push_warning("[TerrainFlattening] No terrain system found, using position.y")
 		return position.y
 
 	# Sample heights in a larger search area (2x the flattening size)
@@ -175,9 +181,10 @@ func _calculate_target_height(position: Vector3, size: Vector2) -> float:
 		target_bucket = best_bucket - 1  # Use lower bucket if significant presence
 
 	var target_height := target_bucket * bucket_size + bucket_size * 0.5  # Center of bucket
-	print("[TerrainFlattening] Target height %.2f (bucket %d, count %d)" % [
-		target_height, target_bucket, best_count
-	])
+	if DEBUG:
+		print("[TerrainFlattening] Target height %.2f (bucket %d, count %d)" % [
+			target_height, target_bucket, best_count
+		])
 	return target_height
 
 
@@ -245,7 +252,8 @@ func _complete_operation(op: FlatteningOperation, key: String) -> void:
 	# Final terrain pass at 100% progress
 	_apply_terrain_modification(op)
 
-	print("[TerrainFlatteningSystem] Completed flattening at %s" % op.center)
+	if DEBUG:
+		print("[TerrainFlatteningSystem] Completed flattening at %s" % op.center)
 
 	# Clean up after a short delay
 	await get_tree().create_timer(1.0).timeout
