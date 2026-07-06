@@ -10,6 +10,8 @@ const TargetingOverlayScript = preload("res://battle_system/ui/targeting_overlay
 const TacticalMinimapScript = preload("res://battle_system/ui/tactical_minimap.gd")
 const BuildMenuPopupScript = preload("res://battle_system/ui/build_menu_popup.gd")
 const PlacementControllerScript = preload("res://firebase_system/placement_controller.gd")
+const BattleLogPanelScript = preload("res://battle_system/ui/battle_log_panel.gd")
+const ResourceStripScript = preload("res://battle_system/ui/resource_strip.gd")
 
 # =============================================================================
 # STATE
@@ -23,7 +25,8 @@ var _targeting_overlay: Node3D
 var _objective_label: Label
 var _tactical_minimap: SubViewportContainer
 var _job_queue_label: Label
-var _supply_label: Label
+var _battle_log: PanelContainer
+var _resource_strip: PanelContainer
 var _build_menu_popup: Control
 
 var _cursor_mode: int = CursorModeScript.Mode.NORMAL
@@ -53,9 +56,6 @@ func _ready() -> void:
 	_build_hud()
 	_connect_signals()
 
-	# Initial supply display update
-	call_deferred("_update_supply_display")
-
 	print("[BattleHUD] Initialized")
 
 
@@ -66,12 +66,11 @@ func _process(delta: float) -> void:
 		var world_pos: Vector3 = _targeting_overlay.get_cursor_position(true)
 		_placement_controller.update_cursor_position(world_pos)
 
-	# Periodically update job queue and supply display
+	# Periodically update job queue display
 	_job_queue_update_timer -= delta
 	if _job_queue_update_timer <= 0.0:
 		_job_queue_update_timer = JOB_QUEUE_UPDATE_INTERVAL
 		_update_job_queue_display()
-		_update_supply_display()
 
 
 func _update_job_queue_display() -> void:
@@ -96,70 +95,6 @@ func _update_job_queue_display() -> void:
 		_job_queue_label.text = "Jobs: %d pending, %d active" % [pending, in_progress]
 	else:
 		_job_queue_label.text = ""
-
-
-func _update_supply_display() -> void:
-	## Update the supply label with current supply levels
-	if not _supply_label:
-		return
-
-	# Get supply from SupplyManager (global) and/or nearest firebase
-	var supply_mgr: Node = get_node_or_null("/root/SupplyManager")
-	var total_supply: float = 0.0
-	var max_supply: float = 0.0
-
-	if supply_mgr:
-		total_supply = supply_mgr.get_global_supply() if supply_mgr.has_method("get_global_supply") else 0.0
-		max_supply = supply_mgr.max_global_supply if "max_global_supply" in supply_mgr else 5000.0
-	else:
-		# Fallback: sum up firebase supply levels
-		var firebases: Array[Node] = get_tree().get_nodes_in_group("firebases")
-		for fb in firebases:
-			if fb.has_method("get") and fb.get("supply_level") != null:
-				total_supply += fb.supply_level
-			if fb.has_method("get") and fb.get("max_supply") != null:
-				max_supply += fb.max_supply
-
-	if max_supply > 0:
-		var supply_percent: float = (total_supply / max_supply) * 100.0
-		_supply_label.text = "Supply: %.0f / %.0f (%.0f%%)" % [total_supply, max_supply, supply_percent]
-
-		# Color based on supply level
-		if supply_percent > 50.0:
-			_supply_label.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_PRIMARY)
-		elif supply_percent > 20.0:
-			_supply_label.add_theme_color_override("font_color", MilitaryTheme.COL_AMMO_LOW)
-		else:
-			_supply_label.add_theme_color_override("font_color", MilitaryTheme.COL_HEALTH_LOW)
-	else:
-		_supply_label.text = ""
-
-
-func _on_supply_consumed(_firebase: Node3D, _amount: float, _reason: String) -> void:
-	## Handle supply consumed event - update display
-	_update_supply_display()
-
-
-func _on_supply_delivered(_destination: Node3D, _amount: float) -> void:
-	## Handle supply delivered event - update display
-	_update_supply_display()
-
-
-func _on_supply_refunded(amount: float, reason: String) -> void:
-	## Handle supply refund from cancelled construction - show toast and update display
-	_update_supply_display()
-
-	# Show refund toast in supply label
-	if _supply_label:
-		var prev_text: String = _supply_label.text
-		_supply_label.text = "+%d supply refunded (%s cancelled)" % [int(amount), reason]
-		_supply_label.add_theme_color_override("font_color", Color(0.4, 0.8, 0.4))  # Green
-
-		get_tree().create_timer(2.0).timeout.connect(func():
-			if is_instance_valid(_supply_label):
-				_supply_label.text = prev_text
-				_update_supply_display()
-		)
 
 
 ## Track if we're currently in a paint drag operation
@@ -365,21 +300,29 @@ func _build_hud() -> void:
 	_job_queue_label.text = ""
 	base.add_child(_job_queue_label)
 
-	# Supply indicator (below job queue, top-right)
-	_supply_label = Label.new()
-	_supply_label.anchor_left = 1.0
-	_supply_label.anchor_right = 1.0
-	_supply_label.anchor_top = 0.0
-	_supply_label.anchor_bottom = 0.0
-	_supply_label.offset_left = -210
-	_supply_label.offset_top = 237
-	_supply_label.offset_right = -10
-	_supply_label.offset_bottom = 257
-	_supply_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_supply_label.add_theme_font_size_override("font_size", 12)
-	_supply_label.add_theme_color_override("font_color", MilitaryTheme.COL_TEXT_PRIMARY)
-	_supply_label.text = ""
-	base.add_child(_supply_label)
+	# Resource strip (top-center): supply stock + rate/min
+	_resource_strip = ResourceStripScript.new()
+	_resource_strip.anchor_left = 0.5
+	_resource_strip.anchor_right = 0.5
+	_resource_strip.anchor_top = 0.0
+	_resource_strip.anchor_bottom = 0.0
+	_resource_strip.offset_left = -140
+	_resource_strip.offset_top = 8
+	_resource_strip.offset_right = 140
+	_resource_strip.offset_bottom = 44
+	base.add_child(_resource_strip)
+
+	# Battle log (bottom, between selection card and command panel)
+	_battle_log = BattleLogPanelScript.new()
+	_battle_log.anchor_left = 0.0
+	_battle_log.anchor_right = 0.5
+	_battle_log.anchor_top = 1.0
+	_battle_log.anchor_bottom = 1.0
+	_battle_log.offset_left = 340
+	_battle_log.offset_top = -150
+	_battle_log.offset_right = 200
+	_battle_log.offset_bottom = -10
+	base.add_child(_battle_log)
 
 	# Targeting overlay (3D, not in canvas layer)
 	_targeting_overlay = TargetingOverlayScript.new()
@@ -400,9 +343,6 @@ func _connect_signals() -> void:
 	# Connect to selection changes
 	if BattleSignals:
 		BattleSignals.selection_changed.connect(_on_selection_changed)
-		BattleSignals.supply_consumed.connect(_on_supply_consumed)
-		BattleSignals.supply_delivered.connect(_on_supply_delivered)
-		BattleSignals.supply_refunded.connect(_on_supply_refunded)
 
 	# Connect to command panel
 	if _command_panel.has_signal("command_pressed"):
@@ -433,16 +373,9 @@ func _connect_signals() -> void:
 
 
 func _on_construction_failed(_firebase: Node3D, reason: String) -> void:
-	## Flash failure reason in supply label as a toast notification
-	if _supply_label:
-		var prev_text: String = _supply_label.text
-		_supply_label.text = "Build failed: %s" % reason
-		_supply_label.add_theme_color_override("font_color", MilitaryTheme.COL_HEALTH_LOW)
-		# Restore after 3 seconds
-		await get_tree().create_timer(3.0).timeout
-		if is_instance_valid(_supply_label):
-			_supply_label.text = prev_text
-			_update_supply_display()  # Restore proper color
+	## Report build failure in the battle log
+	if _battle_log:
+		_battle_log.log_entry("Build failed: %s" % reason, MilitaryTheme.COL_HEALTH_LOW)
 
 
 func _on_selection_changed(_selected: Array = []) -> void:
@@ -495,16 +428,8 @@ func _on_placement_failed(building_type: int, reason: String) -> void:
 
 	print("[BattleHUD] Placement failed: %s - %s" % [building_name, reason])
 
-	# Show in supply label as toast notification (same style as construction_failed)
-	if _supply_label:
-		var prev_text: String = _supply_label.text
-		_supply_label.text = "Cannot build %s: %s" % [building_name, reason]
-		_supply_label.add_theme_color_override("font_color", MilitaryTheme.COL_HEALTH_LOW)
-		# Restore after 3 seconds
-		await get_tree().create_timer(3.0).timeout
-		if is_instance_valid(_supply_label):
-			_supply_label.text = prev_text
-			_update_supply_display()  # Restore proper color
+	if _battle_log:
+		_battle_log.log_entry("Cannot build %s: %s" % [building_name, reason], MilitaryTheme.COL_HEALTH_LOW)
 
 
 func _on_command_pressed(command_name: String) -> void:
@@ -1197,6 +1122,8 @@ func get_cursor_mode() -> int:
 ## Register the player's faction for UI coloring
 func register_player_faction(faction: int) -> void:
 	_player_faction = faction
+	if _battle_log:
+		_battle_log.player_faction = faction
 
 
 ## Show an objective notification (temporary)
