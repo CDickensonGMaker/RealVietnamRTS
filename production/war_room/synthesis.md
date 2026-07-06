@@ -1,49 +1,59 @@
-# The Decree — Full Game Audit
-**Date:** 2026-07-06 · **Arbiter synthesis of:** logistics_diagnosis.md, performance_audit.md, architecture_audit_2026-07-06.md, discussion.md
+# Decree — 2026-07-06 Session B: Unified Systems + RTS Tropes
+**Arbiter synthesis of:** analysis/systems_auditor_2026-07-06b.md + analysis/rts_tropes_gap_2026-07-06.md
 
-## Verdict on the Summoner's Hypotheses
-| # | Hypothesis | Verdict |
-|---|---|---|
-| H1 | Chicken-and-egg: bulldozer needs a road to cut the first road | **REFUTED as pathfinding** (no navmesh/road-gate exists). **CONFIRMED as topology**: first road is never *tasked* — `supply_chain_manager.gd:216-218` silently returns without a second depot/firebase anchor; no player road command exists. |
-| H2 | Below-map spawn = terrain init race | **CONFIRMED** (heightmap, not navmesh): `get_height_at()` returns 0.0 before heightmap init; spawns trust it; reinforcements never sample height at all. Kicker: bad Y inflates 3-D job-distance scoring past the 150m search radius → **the spawn bug causes the idle-worker bug**. |
-| H3 | Road visual never wired | **CONFIRMED**: `RoadDecalRenderer` (only user of dirt_road.png) is orphaned. Production visual `RoadSegmentNode` is untextured solid color, hidden until >10% job progress — and the job usually never exists/starts. |
+## Root Judgment
+The game does not lack systems; it runs on the WRONG copies of them. test_combined.gd
+(main scene) hand-rolls convoy/depot/terrain logic while the real managers are never
+instanced (16 phantom /root/ lookups, 11 unregistered names). Fortification code
+(garrison, fire-ports, trench dig+cover) exists but only the LEGACY construction path
+attaches it — every player-built bunker/MG nest/trench is an inert prop. This is the
+mechanical cause of the Summoner's "random systems" pain.
 
-## Why It Freezes
-Squad-driven clearing advances every physics frame → ClearingSystem rewrites the terrain area **every tick** → `cell_updated` handled synchronously (`terrain_integration.gd:605`, no debounce) → vegetation MultiMesh chunks destroyed and rebuilt in GDScript 60×/sec, stacked with full chunk rebuilds + synchronous `create_trimesh_shape()` cooks. The batching path already exists five lines below the offending handler. Secondary: TestDaemon autoload doing main-thread file I/O every 1–2s; ~100 debug prints in hot paths; latent crash — `bulldozer.gd:357/392` calls non-existent `TerrainClearingSystem.apply_clearing_damage()` (unguarded).
+## Unified Workstreams (dependency order)
 
-## The Decree — Ordered Work
+### Phase F — Fortification tropes (player-facing, decree-critical)
+- **F1 Building completion pipeline** [bead zwq]: ConstructionManager.spawn_building_at
+  must attach GarrisonableStructure/DefensiveStructure per BuildingData (port
+  construction_zone.gd:480-500); merge duplicate DefensiveStructure classes; real
+  PlacedBuilding.take_damage. Exit: built bunker can be garrisoned, MG nest auto-fires.
+- **F2 Garrison flow** [bead 4f8, blocked by F1]: arrival-triggered enter (kill 5m
+  pre-check + blind 2s tween), is_garrisoned suspends squad AI, fire-out scaled by
+  fill, G-exit polish, capacity pips.
+- **F3 Trench v1** [bead d0q, blocked by F1]: route TRENCH commits to
+  create_trench_job (has zero callers today), register TrenchNode with Firebase +
+  cover, lowered squad visual, archive fortification_system/trench.gd.
 
-### Phase 0 — Preserve the work (today, 30 min)
-1. **Commit and push the ~279-file uncommitted batch** (6 weeks of fixes exist only in the working tree — single point of total loss).
-2. Delete root clutter: `nul`, `campaign.zip`, `tests.zip`, `test_scenes.zip`, `freezing big time.zip` (after checking the freeze zip for profiler captures).
-3. Back up Beads (`bd export > backup.jsonl`) — `bd init` reported DB corruption warning.
+### Phase U — System unification (foundation; existing beads updated)
+- **U1 Terrain** [eiu]: UnifiedTerrain sole authority; 3 autoloaded engines + a 4th
+  hand-synced instance in test_combined today.
+- **U2 Harness extraction** [hk7]: convoy FSM/Chinook/depot creation/terrain bootstrap
+  out of test_combined.gd into real managers; exit <300 LOC scene setup.
+- **U3 Supply** [mbp]: one depot registry (EntityCache) + one pool owner
+  (SupplyManager); kill set_meta("supply_current") storage.
+- **U4 Phantom purge** [sn0]: register/rename/delete all 11 phantom autoload names;
+  sync CLAUDE.md table to project.godot.
+- **U5 Squad decomposition** [12x]: unchanged scope.
 
-### Phase 1 — Stop the bleeding (1–2 days)
-4. **Debounce clearing→vegetation**: route `_on_cell_updated` through the existing 0.2s batch; write terrain state on stage transitions, not every tick. *(freeze fix, ~15 lines)*
-5. **Coalesce chunk rebuilds**: mutate heights in place where possible; budget-check before completing a chunk; defer `create_trimesh_shape` to WorkerThreadPool or switch terrain to HeightMapShape3D. *(freeze fix)*
-6. **Fix/guard `apply_clearing_damage`** on TerrainClearingSystem (implement forwarder or has_method-guard callers). *(latent crash)*
-7. **Remove TestDaemon from autoloads**; gate debug prints in job/construction/clearing paths. *(quick wins)*
+### Phase C — Controls & QoL
+- **C1 Control groups + stances** [bead 1z5]: port orphaned rts_controller.gd impl
+  into SelectionManager; HOLD_FIRE/AGGRESSIVE standing orders; finish Hold TODO.
+- **C2 Placement QoL** [bead aqz]: failed commit retries instead of cancels;
+  shift-place multiples; universal ghost rotation; cost on ghost.
+- **C3 Alerts + audio** [bead jtl]: minimap ping + edge flash + sting on
+  firebase_under_attack / friendly losses; register AudioManager autoload.
 
-### Phase 2 — Close the logistics loop (the stuck feature, 2–4 days)
-8. **Terrain-ready spawn gating** (extends Beads o2k): `terrain_ready` signal + deferred-spawn helper; `_snap_to_terrain` must not accept the 0.0 sentinel; reinforcement spawns must sample height.
-9. **Job discovery on XZ distance** in `get_best_job_for_worker`/`_score_job` so height error can't hide jobs.
-10. **First-road fallback anchor**: when no second depot/firebase exists, connect to parent firebase/rear base; log instead of silent return. Consider a direct player "cut road" command (Pillar 1 verb).
-11. **One road pipeline**: RoadSegmentNode is canonical — give it the dirt texture, show planned outline at 0% progress; delete RoadDecalRenderer and the Bulldozer PATH_CUTTING branch.
-12. **Convoys must use RoadNetwork** (currently straight-line; roads confer zero benefit — Pillar 3 breach vs ADR-0006).
+### Phase D — Cleanup
+- **D1 Orphan sweep** [8rc updated]: archive fortification monoliths after F-phase
+  harvest, orphaned health bar duo, rts_controller after C1 port, fix/delete
+  scenes/main.tscn, standardize take_damage contract.
 
-### Phase 3 — Scale headroom + hygiene (1–2 weeks, after loop is verified)
-13. Squad tiered update staggering (BT/morale/suppression @10Hz slices, animation LOD) per `docs/reference/rts_architecture_patterns.md`; throttle SpatialHashGrid rescan; cache terrain refs; fix projectile double-collision. (Epic zuf)
-14. Fix phantom singletons (`DoctrineManager`, `TerrainFlatteningSystem` name mismatch, `UnitSpawner`; ReinforcementManager has zero refs) — Pillar 4 is currently dead at runtime.
-15. Supply one-owner consolidation (4 competing implementations; Beads mbp) and promote a **real main scene** to replace test_combined.tscn.
-16. Truth maintenance: fix CLAUDE.md directory/autoload tables; rewrite terrain-clearing.md to describe the job pipeline; resolve PRD vs GAME_BIBLE authority conflict (Chinook is implemented despite explicit exclusion — decide, then enforce).
-17. Squad.gd decomposition (12x) rides with #13.
+## Tradeoffs Named (Devil's Advocate)
+- Executing F before U ships visible tropes sooner but builds on the harness main
+  scene; U2/U1 rewire ground under F later. Accepted: F-phase touches construction
+  pipeline only, low overlap with terrain/supply seams.
+- Trench v1 fakes terrain deformation with meshes (EngineeringSystem carve deferred).
+- Playtest (6ba) remains deferred by Summoner order; each workstream gates on
+  headless-boot only. Risk acknowledged: regressions surface late.
 
-### Deferred (named sacrifice)
-- **UI north star** (`docs/design/ui-vision.md`): no HUD build-out until Phases 1–2 verified in-game. Future HUD must be signal-driven (battle_hud.gd is already a group-scan offender).
-- Village/tunnel/airplane systems (~3,700 LOC of MVP-excluded scope): freeze, don't extend.
-
-## Pillar Health (from architecture audit)
-P1 Carve the Map: WORKING (strongest). P2 Firebases: working-partial. P3 Supply: fragmented, no owner. P4 Doctrine: spec-only, dead at runtime. P5 War Continues: partial. Persistent map/save: spec-only.
-
-## Laws Observed
-Tradeoffs named in discussion.md. No decree item violates a Pillar; items 10–12 restore Pillar 1/3 integrity. Actionable items recorded in Beads. The Summoner holds final authority.
+## Execution Order
+F1 -> F2+F3 parallel -> C1/C2/C3 independent -> U1-U4 -> U5 -> D1.
