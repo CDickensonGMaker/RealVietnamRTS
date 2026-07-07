@@ -6,6 +6,7 @@ class_name PlacedBuilding
 
 const BuildingData = preload("res://firebase_system/building_data.gd")
 const Firebase = preload("res://firebase_system/firebase.gd")
+const BuildingComponentFactory = preload("res://firebase_system/building_component_factory.gd")
 
 signal building_destroyed(building: PlacedBuilding)
 
@@ -44,6 +45,10 @@ func _ready() -> void:
 
 	if building_data.is_hq_building:
 		add_to_group("hq_buildings")
+
+	# Attach garrison/defense components + cover group - same factory as the
+	# construction paths, so scene-placed buildings are real combat objects too
+	BuildingComponentFactory.attach_building_components(self, building_data)
 
 	# Setup collision
 	_setup_collision()

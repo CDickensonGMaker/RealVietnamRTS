@@ -1037,7 +1037,7 @@ func cancel_job(job: UnifiedJobClass) -> bool:
 		job.unassign_worker(worker)
 
 	# Refund supply for build jobs (scaled by progress - full refund if no work done)
-	if job.job_type == UnifiedJobClass.Type.BUILD_STRUCTURE:
+	if job.job_type == UnifiedJobClass.Type.BUILD_STRUCTURE or job.job_type == UnifiedJobClass.Type.DIG_TRENCH:
 		var supply_cost: int = job.metadata.get("supply_cost", 0) as int
 		var firebase: Node = job.metadata.get("firebase")
 		if supply_cost > 0 and is_instance_valid(firebase):
@@ -1174,9 +1174,24 @@ func _on_construction_complete(_building: Node3D, job: UnifiedJobClass) -> void:
 
 
 func _on_trench_complete(job: UnifiedJobClass) -> void:
-	"""Handle trench completion"""
-	if is_instance_valid(job) and job.state != UnifiedJobClass.State.COMPLETE:
+	"""Handle trench completion - register the trench with its firebase (Pillar 2).
+	Cover comes from the TrenchNode joining the cover_fortified group on complete."""
+	if not is_instance_valid(job):
+		return
+	if job.state != UnifiedJobClass.State.COMPLETE:
 		job.set_state(UnifiedJobClass.State.COMPLETE)
+
+	var trench: Node = job.metadata.get("job_node")
+	if not is_instance_valid(trench):
+		push_warning("[JobSystem] Trench job #%d completed but its node is gone" % job.job_id)
+		return
+
+	var firebase: Node = job.metadata.get("firebase")
+	if not is_instance_valid(firebase):
+		firebase = _get_nearest_firebase(trench.global_position)
+	if is_instance_valid(firebase) and "buildings" in firebase and trench not in firebase.buildings:
+		firebase.buildings.append(trench)
+		print("[JobSystem] Trench registered with firebase %s" % firebase.name)
 
 
 func _on_wire_complete(job: UnifiedJobClass) -> void:
@@ -1306,8 +1321,28 @@ func _create_prerequisites(center: Vector3, footprint_size: Vector2, rotation_y:
 
 
 func create_trench_job(center: Vector3, length: float = 8.0, width: float = 2.0, rotation_y: float = 0.0, priority: UnifiedJobClass.Priority = UnifiedJobClass.Priority.NORMAL) -> UnifiedJobClass:
-	"""Create a trench digging job with clear/flatten prerequisites"""
+	"""Create a trench digging job with clear/flatten prerequisites.
+	Deducts TRENCH supply cost from global supply (mirrors create_build_job);
+	returns null if insufficient supply."""
 	var size := Vector2(length, width)
+
+	# Supply check/deduction - trench segments cost supply like any other fortification
+	var data: BuildingDataClass = BuildingDataClass.get_building_data(BuildingDataClass.BuildingType.TRENCH)
+	var supply_cost: int = data.supply_cost if data else 0
+	var firebase: Node = _get_nearest_firebase(center)
+	if supply_cost > 0:
+		var supply_mgr: Node = get_node_or_null("/root/SupplyManager")
+		if supply_mgr:
+			if not supply_mgr.can_afford(float(supply_cost)):
+				push_warning("[JobSystem] Insufficient global supply for Trench (need %d, have %.0f)" % [
+					supply_cost, supply_mgr.get_global_supply()
+				])
+				return null
+			supply_mgr.consume_global_supply(float(supply_cost))
+			if BattleSignals:
+				BattleSignals.supply_consumed.emit(firebase, float(supply_cost), "construction: Trench")
+		else:
+			push_warning("[JobSystem] SupplyManager not found - allowing trench without supply check")
 
 	# Create prerequisite jobs (with rotation for oriented clearing, inherit priority)
 	var prereqs: Dictionary = _create_prerequisites(center, size, rotation_y, priority)
@@ -1315,9 +1350,19 @@ func create_trench_job(center: Vector3, length: float = 8.0, width: float = 2.0,
 	# Create the trench job
 	var job: UnifiedJobClass = create_job(UnifiedJobClass.Type.DIG_TRENCH, center, size, priority)
 
+	# Store supply info for refund on cancel
+	job.metadata["supply_cost"] = supply_cost
+	if firebase:
+		job.metadata["firebase"] = firebase
+
 	# Store rotation for node creation
 	if absf(rotation_y) > 0.01:
 		job.metadata["rotation"] = rotation_y
+		# Recreate the node: create_job() built it before rotation metadata was set
+		var old_node: Node = job.metadata.get("job_node")
+		if is_instance_valid(old_node):
+			old_node.queue_free()
+		_create_job_node(job, center, size)
 
 	# Add prerequisites
 	if prereqs.flatten_job:

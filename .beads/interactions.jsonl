@@ -33,3 +33,5 @@
 {"id":"int-56e4df4c","kind":"field_change","created_at":"2026-07-06T19:39:52.4062606Z","actor":"CDickensonGMaker","issue_id":"RealVietnamRTS-9vo","extra":{"field":"status","new_value":"closed","old_value":"open"}}
 {"id":"int-93699147","kind":"field_change","created_at":"2026-07-06T20:37:41.2341142Z","actor":"CDickensonGMaker","issue_id":"RealVietnamRTS-4ov","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-0302eb13","kind":"field_change","created_at":"2026-07-06T20:42:54.6637279Z","actor":"CDickensonGMaker","issue_id":"RealVietnamRTS-qgl","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-1ff273e3","kind":"field_change","created_at":"2026-07-06T21:38:59.4621548Z","actor":"CDickensonGMaker","issue_id":"RealVietnamRTS-zwq","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-b740d0bc","kind":"field_change","created_at":"2026-07-06T21:50:18.2129422Z","actor":"CDickensonGMaker","issue_id":"RealVietnamRTS-4f8","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}

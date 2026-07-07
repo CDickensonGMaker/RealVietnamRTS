@@ -97,6 +97,10 @@ var is_garrisoned: bool = false
 var garrison_structure: Node3D = null
 var _pre_garrison_collision_layer: int = 0
 
+## Trench state (set by TrenchNode on body enter/exit; visual only - combat
+## cover flows through CoverSystem's cover_fortified group)
+var is_in_trench: bool = false
+
 # Cover-seeking behavior (Phase 4.2 - seek cover when under fire)
 var _seeking_cover: bool = false
 var _cover_seek_target: Vector3 = Vector3.ZERO
@@ -1075,6 +1079,21 @@ func exit_garrison() -> void:
 	set_physics_process(true)
 	state = State.IDLE
 	_last_snap_xz = Vector2(INF, INF)  # Force a terrain re-snap at the new position
+
+
+## Lower/raise soldier visuals into a trench. Called by TrenchNode on body
+## enter/exit. Visual only - the damage reduction comes from CoverSystem
+## seeing the trench's cover_fortified group membership.
+func set_in_trench(inside: bool, trench_depth: float = 1.5) -> void:
+	if data and data.is_vehicle:
+		return
+	if is_in_trench == inside:
+		return
+	is_in_trench = inside
+
+	var visual: Node3D = _formation_container if is_instance_valid(_formation_container) else _model_node
+	if is_instance_valid(visual):
+		visual.position.y = -trench_depth * 0.5 if inside else 0.0
 
 
 # =============================================================================

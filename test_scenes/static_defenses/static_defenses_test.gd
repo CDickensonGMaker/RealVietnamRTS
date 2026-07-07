@@ -18,7 +18,7 @@ extends Node3D
 
 const TestSceneBase = preload("res://test_scenes/common/test_scene_base.gd")
 const Bunker = preload("res://fortification_system/bunker.gd")
-const Trench = preload("res://fortification_system/trench.gd")
+const TrenchNode = preload("res://firebase_system/nodes/trench_node.gd")
 const Artillery = preload("res://battle_system/units/artillery.gd")
 const Squad = preload("res://battle_system/nodes/squad.gd")
 const SquadData = preload("res://battle_system/data/squad_data.gd")
@@ -113,26 +113,10 @@ func _build_defensive_line() -> void:
 	pit2.global_position = pit2_pos
 	mortar_pits.append(pit2)
 
-	# Trench running between bunker A and bunker B
-	var trench: Trench = Trench.new()
-	trench.trench_name = "Trench"
+	# Trench running between bunker A and bunker B (pre-dug for the test)
+	var trench := TrenchNode.create(Vector3(2.5, 0.0, -3.0), 45.0, 2.0)
 	add_child(trench)
-	var trench_pts: PackedVector3Array = PackedVector3Array([
-		Vector3(-20.0, 0.0, -3.0),
-		Vector3(-5.0, 0.0, -3.0),
-		Vector3(10.0, 0.0, -3.0),
-		Vector3(25.0, 0.0, -3.0),
-	])
-	# Snap each point to terrain (reuse terrain var from above)
-	if terrain and terrain.has_method("get_height_at"):
-		var snapped: PackedVector3Array = PackedVector3Array()
-		for p in trench_pts:
-			var sp: Vector3 = p
-			sp.y = terrain.get_height_at(p)
-			snapped.append(sp)
-		trench.set_path(snapped)
-	else:
-		trench.set_path(trench_pts)
+	trench.add_work(1.0)  # Instantly complete - test starts with a dug trench
 	trenches.append(trench)
 
 	# AA gun on a hill behind the line
@@ -236,16 +220,17 @@ func _handle_right_click(screen_pos: Vector2) -> void:
 		_pending_garrison(selected_squad, b)
 		return
 
-	var trench_hit: Node3D = _raycast_at(screen_pos, ["trenches"])
-	if trench_hit and trench_hit is Trench:
-		var t := trench_hit as Trench
-		t.enter_trench(selected_squad)
-		print("[StaticDefensesTest] %s entered trench" % selected_squad.name)
-		return
-
-	# Otherwise just move
+	# Canonical trenches are walk-in cover: a move order into the footprint is
+	# enough - the trench's Area3D applies cover + lowered visuals on arrival
 	var ground: Vector3 = _raycast_ground(screen_pos)
-	if ground != Vector3.INF and selected_squad.has_method("move_to"):
+	if ground == Vector3.INF:
+		return
+	for t in trenches:
+		if is_instance_valid(t) and t.is_position_inside(ground):
+			print("[StaticDefensesTest] %s moving into trench" % selected_squad.name)
+			break
+
+	if selected_squad.has_method("move_to"):
 		selected_squad.move_to(ground)
 
 
@@ -271,10 +256,7 @@ func _unload_all_garrisons() -> void:
 	for b in bunkers:
 		if is_instance_valid(b):
 			b.unload_all()
-	for t in trenches:
-		if is_instance_valid(t):
-			for s in t.get_occupants():
-				t.leave_trench(s)
+	# Canonical trenches are walk-in cover - nothing to unload; units leave by moving out
 
 
 func _spawn_enemy_squad() -> void:

@@ -75,6 +75,14 @@ func _ready() -> void:
 	_snap_to_terrain()
 
 
+func _exit_tree() -> void:
+	# Restore any occupants (trench destroyed/freed while units inside)
+	for unit in units_inside:
+		if is_instance_valid(unit):
+			_apply_cover_to_unit(unit, false)
+	units_inside.clear()
+
+
 func _setup_collision() -> void:
 	collision_shape = CollisionShape3D.new()
 	box_shape = BoxShape3D.new()
@@ -153,14 +161,10 @@ func _on_body_exited(body: Node3D) -> void:
 
 
 func _apply_cover_to_unit(unit: Node3D, entering: bool) -> void:
-	## Apply or remove cover bonus from unit
-	if unit.has_method("set_cover_bonus"):
-		if entering:
-			unit.set_cover_bonus(TRENCH_COVER_VALUE)
-		else:
-			unit.set_cover_bonus(0.0)
-	elif "cover_bonus" in unit:
-		unit.cover_bonus = TRENCH_COVER_VALUE if entering else 0.0
+	## Lower/raise the squad's visual. Combat cover itself flows through
+	## CoverSystem (cover_fortified group + is_position_inside), not this call.
+	if unit.has_method("set_in_trench"):
+		unit.set_in_trench(entering, depth)
 
 
 ## Add work progress (called by workers)
@@ -207,6 +211,14 @@ func _complete() -> void:
 
 	# Hide outline
 	outline_mesh.visible = false
+
+	# Join the cover group only once dug - CoverSystem scans this group and uses
+	# is_position_inside() for footprint containment (trenches are linear)
+	add_to_group("cover_fortified")
+
+	# Units already standing in the footprint never fire body_entered - sweep them in
+	for body in get_overlapping_bodies():
+		_on_body_entered(body)
 
 	trench_complete.emit()
 	print("[TrenchNode] Complete! Length %.1fm at %s" % [length, global_position])

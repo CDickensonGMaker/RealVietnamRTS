@@ -27,6 +27,23 @@ static func attach_building_components(building: Node3D, data: BuildingData) -> 
 	if data.auto_attacks and not data.defense_weapon.is_empty():
 		_attach_defense(building, data)
 
+	_assign_cover_group(building, data)
+
+
+static func _assign_cover_group(building: Node3D, data: BuildingData) -> void:
+	"""Join the CoverSystem scan group matching this building's cover tier, so
+	sandbags/foxholes/bunkers grant cover through the same canonical path as
+	trenches (which join cover_fortified on completion). Data-driven from
+	BuildingData.cover_value; buildings that provide no cover join nothing."""
+	if not data.provides_cover or data.cover_value <= 0.0:
+		return
+	if data.cover_value >= 0.7:
+		building.add_to_group("cover_fortified")
+	elif data.cover_value >= 0.5:
+		building.add_to_group("cover_heavy")
+	else:
+		building.add_to_group("cover_light")
+
 
 static func _attach_garrison(building: Node3D, data: BuildingData) -> void:
 	"""Attach a GarrisonableStructure sized from BuildingData.garrison_capacity."""

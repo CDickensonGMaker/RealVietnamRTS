@@ -9,8 +9,11 @@ const VietnamWeaponDataScript = preload("res://battle_system/data/vietnam_weapon
 const COVER_DETECTION_RADIUS: float = 2.0  # How far to check for nearby cover objects
 const COVER_UPDATE_INTERVAL: float = 0.5  # How often to update cover state (seconds)
 
-## Cover object groups
-const COVER_GROUPS: Array[String] = ["cover_heavy", "cover_light", "cover_fortified", "buildings"]
+## Cover object groups. Buildings/trenches join the tier matching their
+## BuildingData.cover_value via BuildingComponentFactory._assign_cover_group;
+## the blanket "buildings" group is intentionally NOT scanned (a mess hall is
+## not fortified cover).
+const COVER_GROUPS: Array[String] = ["cover_heavy", "cover_light", "cover_fortified"]
 
 ## Cached terrain integration reference
 var _terrain: Node = null
@@ -152,9 +155,15 @@ func _check_cover_objects(world_pos: Vector3) -> int:
 			if not is_instance_valid(obj):
 				continue
 
-			var distance: float = world_pos.distance_to(obj.global_position)
-			if distance > COVER_DETECTION_RADIUS:
-				continue
+			# Linear cover (trenches): footprint containment beats center distance,
+			# which fails beyond COVER_DETECTION_RADIUS of a long object's center
+			if obj.has_method("is_position_inside"):
+				if not obj.is_position_inside(world_pos):
+					continue
+			else:
+				var distance: float = world_pos.distance_to(obj.global_position)
+				if distance > COVER_DETECTION_RADIUS:
+					continue
 
 			# Get cover type from object
 			var obj_cover: int = _get_object_cover_type(obj, group)

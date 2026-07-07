@@ -561,20 +561,30 @@ func _commit_linear_placement() -> bool:
 
 		var pos: Vector3 = _linear_segment_positions[i]
 
-		# Create build job for this segment
-		# Signature: create_build_job(center, building_type, rotation, footprint_size, skip_validation)
-		if _job_system and _job_system.has_method("create_build_job"):
-			var job = _job_system.create_build_job(
+		# Create a job for this segment. Trenches are dug (DIG_TRENCH -> TrenchNode),
+		# not built structures - route them to the trench pipeline.
+		var job = null
+		if _current_building_type == BuildingData.BuildingType.TRENCH \
+				and _job_system and _job_system.has_method("create_trench_job"):
+			job = _job_system.create_trench_job(
+				pos,
+				footprint.x,
+				footprint.y,
+				_linear_rotation_y  # perpendicular to drag direction
+			)
+		elif _job_system and _job_system.has_method("create_build_job"):
+			# Signature: create_build_job(center, building_type, rotation, footprint_size, skip_validation)
+			job = _job_system.create_build_job(
 				pos,
 				_current_building_type,
 				_linear_rotation_y,  # perpendicular to drag direction
 				footprint,
 				false  # don't skip validation
 			)
-			var job_id: int = job.job_id if is_instance_valid(job) else -1
-			if job_id >= 0:
-				placed_positions.append(pos)
-				print("[PlacementController] Created linear segment job #%d at %v" % [job_id, pos])
+		var job_id: int = job.job_id if is_instance_valid(job) else -1
+		if job_id >= 0:
+			placed_positions.append(pos)
+			print("[PlacementController] Created linear segment job #%d at %v" % [job_id, pos])
 
 	if placed_positions.size() > 0:
 		print("[PlacementController] Placed %d/%d segments of %s" % [
